@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="h2">Settings</h1>
+
+<form method="POST" class="mt-4">
+    <div class="row">
+        <div class="col-md-6">
+            <h3>Zendesk Configuration</h3>
+            <div class="mb-3">
+                <label class="form-label">Zendesk Subdomain</label>
+                <input type="text" class="form-control" name="ZENDESK_SUBDOMAIN" value="{{ settings.get('ZENDESK_SUBDOMAIN', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Zendesk Email</label>
+                <input type="email" class="form-control" name="ZENDESK_EMAIL" value="{{ settings.get('ZENDESK_EMAIL', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Zendesk API Token</label>
+                <input type="password" class="form-control" name="ZENDESK_API_TOKEN" value="{{ settings.get('ZENDESK_API_TOKEN', '') }}">
+            </div>
+            <button type="button" class="btn btn-info" onclick="testConnection('zendesk')">Test Connection</button>
+        </div>
+        
+        <div class="col-md-6">
+            <h3>Wasabi B2 Configuration</h3>
+            <div class="mb-3">
+                <label class="form-label">Wasabi Endpoint</label>
+                <input type="text" class="form-control" name="WASABI_ENDPOINT" value="{{ settings.get('WASABI_ENDPOINT', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Access Key</label>
+                <input type="text" class="form-control" name="WASABI_ACCESS_KEY" value="{{ settings.get('WASABI_ACCESS_KEY', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Secret Key</label>
+                <input type="password" class="form-control" name="WASABI_SECRET_KEY" value="{{ settings.get('WASABI_SECRET_KEY', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Bucket Name</label>
+                <input type="text" class="form-control" name="WASABI_BUCKET_NAME" value="{{ settings.get('WASABI_BUCKET_NAME', '') }}">
+            </div>
+            <button type="button" class="btn btn-info" onclick="testConnection('wasabi')">Test Connection</button>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <h3>Email Configuration</h3>
+            <div class="mb-3">
+                <label class="form-label">SMTP Server</label>
+                <input type="text" class="form-control" name="SMTP_SERVER" value="{{ settings.get('SMTP_SERVER', 'smtp.gmail.com') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">SMTP Port</label>
+                <input type="number" class="form-control" name="SMTP_PORT" value="{{ settings.get('SMTP_PORT', '587') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">SMTP Username</label>
+                <input type="email" class="form-control" name="SMTP_USERNAME" value="{{ settings.get('SMTP_USERNAME', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">SMTP Password</label>
+                <input type="password" class="form-control" name="SMTP_PASSWORD" value="{{ settings.get('SMTP_PASSWORD', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Report Email</label>
+                <input type="email" class="form-control" name="REPORT_EMAIL" value="{{ settings.get('REPORT_EMAIL', 'it@go4rex.com') }}">
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </div>
+</form>
+
+<script>
+function testConnection(type) {
+    fetch('/api/test_connection', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({type: type})
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert(data.message);
+    });
+}
+</script>
+{% endblock %}
+
+

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="h2">Offload Logs</h1>
+
+<div class="mt-4">
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Run Date</th>
+                <th>Tickets Processed</th>
+                <th>Attachments Uploaded</th>
+                <th>Errors</th>
+                <th>Status</th>
+                <th>Report Sent</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs.items %}
+            <tr>
+                <td>{{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td>{{ log.tickets_processed }}</td>
+                <td>{{ log.attachments_uploaded }}</td>
+                <td>{{ log.errors_count }}</td>
+                <td>
+                    <span class="badge bg-{{ 'success' if log.status == 'completed' else 'warning' }}">
+                        {{ log.status }}
+                    </span>
+                </td>
+                <td>
+                    <i class="bi bi-{{ 'check-circle text-success' if log.report_sent else 'x-circle text-danger' }}"></i>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <nav>
+        <ul class="pagination">
+            {% if logs.has_prev %}
+            <li class="page-item"><a class="page-link" href="?page={{ logs.prev_num }}">Previous</a></li>
+            {% endif %}
+            {% for page_num in logs.iter_pages() %}
+                {% if page_num %}
+                    <li class="page-item {{ 'active' if page_num == logs.page else '' }}">
+                        <a class="page-link" href="?page={{ page_num }}">{{ page_num }}</a>
+                    </li>
+                {% else %}
+                    <li class="page-item disabled"><span class="page-link">…</span></li>
+                {% endif %}
+            {% endfor %}
+            {% if logs.has_next %}
+            <li class="page-item"><a class="page-link" href="?page={{ logs.next_num }}">Next</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endblock %}
+
+

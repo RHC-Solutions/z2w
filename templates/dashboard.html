@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="h2">Dashboard</h1>
+
+<div class="row mt-4">
+    <div class="col-md-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body">
+                <h5 class="card-title">Total Tickets Processed</h5>
+                <h2>{{ total_processed }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-success">
+            <div class="card-body">
+                <h5 class="card-title">Total Attachments</h5>
+                <h2>{{ total_attachments }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-info">
+            <div class="card-body">
+                <h5 class="card-title">Scheduler Status</h5>
+                <h6 id="scheduler-status">Loading...</h6>
+                <small id="next-run"></small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Actions</h5>
+                <button class="btn btn-primary btn-sm" onclick="runNow()">Run Now</button>
+                <button class="btn btn-success btn-sm" onclick="startScheduler()">Start Scheduler</button>
+                <button class="btn btn-danger btn-sm" onclick="stopScheduler()">Stop Scheduler</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <h3>Recent Offload Logs</h3>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Tickets Processed</th>
+                    <th>Attachments Uploaded</th>
+                    <th>Errors</th>
+                    <th>Status</th>
+                    <th>Report Sent</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in recent_logs %}
+                <tr>
+                    <td>{{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ log.tickets_processed }}</td>
+                    <td>{{ log.attachments_uploaded }}</td>
+                    <td>{{ log.errors_count }}</td>
+                    <td>
+                        <span class="badge bg-{{ 'success' if log.status == 'completed' else 'warning' }}">
+                            {{ log.status }}
+                        </span>
+                    </td>
+                    <td>
+                        <i class="bi bi-{{ 'check-circle text-success' if log.report_sent else 'x-circle text-danger' }}"></i>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function updateSchedulerStatus() {
+    fetch('/api/scheduler/status')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('scheduler-status').textContent = data.running ? 'Running' : 'Stopped';
+            if (data.next_run) {
+                const nextRun = new Date(data.next_run);
+                document.getElementById('next-run').textContent = 'Next: ' + nextRun.toLocaleString();
+            }
+        });
+}
+
+function runNow() {
+    fetch('/api/run_now', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            alert(data.message);
+            if (data.success) location.reload();
+        });
+}
+
+function startScheduler() {
+    fetch('/api/scheduler/start', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            alert(data.message);
+            updateSchedulerStatus();
+        });
+}
+
+function stopScheduler() {
+    fetch('/api/scheduler/stop', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            alert(data.message);
+            updateSchedulerStatus();
+        });
+}
+
+updateSchedulerStatus();
+setInterval(updateSchedulerStatus, 30000);
+</script>
+{% endblock %}
+
+
