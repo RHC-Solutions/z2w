@@ -1,7 +1,7 @@
 """
 Admin panel for managing settings and monitoring
 """
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from datetime import datetime
 from sqlalchemy import func
 from database import get_db, Setting, ProcessedTicket, OffloadLog
@@ -10,8 +10,9 @@ from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY
+from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD
 import os
+from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -26,7 +27,41 @@ def init_scheduler():
         scheduler = OffloadScheduler()
     return scheduler
 
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login', next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapper
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Admin login"""
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['logged_in'] = True
+            session['username'] = username
+            next_url = request.args.get('next') or url_for('index')
+            return redirect(next_url)
+        flash('Invalid credentials', 'error')
+        return render_template('login.html')
+    # If already logged in, go to dashboard
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """End session"""
+    session.clear()
+    flash('Logged out', 'success')
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def index():
     """Dashboard"""
     db = get_db()
@@ -60,6 +95,7 @@ def index():
         db.close()
 
 @app.route('/settings', methods=['GET', 'POST'])
+@login_required
 def settings():
     """Settings page"""
     db = get_db()
@@ -169,6 +205,7 @@ def settings():
         db.close()
 
 @app.route('/tickets')
+@login_required
 def tickets():
     """List processed tickets"""
     db = get_db()
@@ -210,6 +247,7 @@ def tickets():
         db.close()
 
 @app.route('/logs')
+@login_required
 def logs():
     """View offload logs"""
     db = get_db()
@@ -251,6 +289,7 @@ def logs():
         db.close()
 
 @app.route('/api/test_connection', methods=['POST'])
+@login_required
 def test_connection():
     """Test Zendesk and Wasabi connections"""
     connection_type = request.json.get('type')
@@ -331,6 +370,7 @@ def test_connection():
     return jsonify({'success': False, 'message': 'Invalid connection type'})
 
 @app.route('/api/run_now', methods=['POST'])
+@login_required
 def run_now():
     """Manually trigger offload"""
     try:
@@ -341,6 +381,7 @@ def run_now():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/start', methods=['POST'])
+@login_required
 def start_scheduler():
     """Start scheduler"""
     try:
@@ -352,6 +393,7 @@ def start_scheduler():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/stop', methods=['POST'])
+@login_required
 def stop_scheduler():
     """Stop scheduler"""
     try:
@@ -363,6 +405,7 @@ def stop_scheduler():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/status', methods=['GET'])
+@login_required
 def scheduler_status():
     """Get scheduler status"""
     sched = init_scheduler()

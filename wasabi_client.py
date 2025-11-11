@@ -54,16 +54,23 @@ class WasabiClient:
         Upload attachment to Wasabi B2
         Returns the S3 key if successful, None otherwise
         
-        Format: YYYYMMDD/ticketID_original_filename
+        Key format: YYYYMMDD/ticketID_YYYYMMDD_original_filename
         """
         # Create date-based folder (YYYYMMDD)
         date_folder = datetime.utcnow().strftime("%Y%m%d")
+        date_str = date_folder
         
-        # Ensure filename starts with ticketID_
-        if not original_filename.startswith(f"{ticket_id}_"):
-            filename = f"{ticket_id}_{original_filename}"
-        else:
+        # Ensure filename format ticketID_YYYYMMDD_original_filename
+        prefix_ticket = f"{ticket_id}_"
+        prefix_full = f"{ticket_id}_{date_str}_"
+        if original_filename.startswith(prefix_full):
             filename = original_filename
+        elif original_filename.startswith(prefix_ticket):
+            # Insert date after the ticket id
+            remainder = original_filename[len(prefix_ticket):]
+            filename = f"{ticket_id}_{date_str}_{remainder}"
+        else:
+            filename = f"{ticket_id}_{date_str}_{original_filename}"
         
         # Create S3 key
         s3_key = f"{date_folder}/{filename}"
