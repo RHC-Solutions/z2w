@@ -3,9 +3,11 @@ Main entry point for Zendesk to Wasabi B2 Offloader
 """
 from database import init_db
 from admin_panel import app, init_scheduler
-from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST
+from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SSL_CERT_PATH, SSL_KEY_PATH
 from logger_config import setup_logging, archive_old_logs
 import logging
+import ssl
+import os
 
 if __name__ == '__main__':
     # Set up logging first
@@ -33,8 +35,28 @@ if __name__ == '__main__':
     werkzeug_log = logging.getLogger('werkzeug')
     werkzeug_log.setLevel(logging.ERROR)  # Only show errors, not access logs
     
+    # Configure SSL context if certificates are provided
+    ssl_context = None
+    protocol = "http"
+    if SSL_CERT_PATH and SSL_KEY_PATH:
+        cert_path = os.path.abspath(SSL_CERT_PATH)
+        key_path = os.path.abspath(SSL_KEY_PATH)
+        
+        if os.path.exists(cert_path) and os.path.exists(key_path):
+            try:
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ssl_context.load_cert_chain(cert_path, key_path)
+                protocol = "https"
+                logger.info(f"SSL certificates loaded: cert={cert_path}, key={key_path}")
+            except Exception as e:
+                logger.error(f"Failed to load SSL certificates: {e}")
+                logger.warning("Falling back to HTTP")
+        else:
+            logger.warning(f"SSL certificate files not found. Cert: {cert_path}, Key: {key_path}")
+            logger.warning("Falling back to HTTP")
+    
     # Run Flask admin panel
-    logger.info(f"Starting admin panel on http://{ADMIN_PANEL_HOST}:{ADMIN_PANEL_PORT}")
-    app.run(host=ADMIN_PANEL_HOST, port=ADMIN_PANEL_PORT, debug=False)
+    logger.info(f"Starting admin panel on {protocol}://{ADMIN_PANEL_HOST}:{ADMIN_PANEL_PORT}")
+    app.run(host=ADMIN_PANEL_HOST, port=ADMIN_PANEL_PORT, debug=False, ssl_context=ssl_context)
 
 

@@ -51,6 +51,10 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "4Ur@k?WU7eq&Frm8AK+%bxcruq82N4^T")
 
+# SSL/HTTPS Configuration
+SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "")
+SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "")
+
 def reload_config():
     """Reload environment variables from .env file"""
     load_dotenv(override=True)
@@ -59,6 +63,7 @@ def reload_config():
     global SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, REPORT_EMAIL
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL
     global ADMIN_USERNAME, ADMIN_PASSWORD
+    global SSL_CERT_PATH, SSL_KEY_PATH
     
     ZENDESK_SUBDOMAIN = os.getenv("ZENDESK_SUBDOMAIN", "")
     ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL", "")
@@ -81,5 +86,8 @@ def reload_config():
 
     ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "4Ur@k?WU7eq&Frm8AK+%bxcruq82N4^T")
+    
+    SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "")
+    SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "")
 
 
