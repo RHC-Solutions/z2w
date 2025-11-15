@@ -117,7 +117,8 @@ class ZendeskClient:
         """
         Get all inline images from ticket comments
         Returns list of inline image dicts with comment_id and image info
-        Inline images are images embedded in comment HTML, not regular attachments
+        Inline images are images embedded in comment HTML, not regular attachments.
+        These are processed exactly like regular attachments: download, upload to Wasabi, replace with link, delete.
         """
         if not self.base_url:
             return []
@@ -129,6 +130,8 @@ class ZendeskClient:
             response = self.session.get(url)
             response.raise_for_status()
             data = response.json()
+            
+            print(f"Fetching inline images from {len(data.get('comments', []))} comments for ticket {ticket_id}")
             
             # Extract inline images from all comments
             for comment in data.get("comments", []):
@@ -149,6 +152,9 @@ class ZendeskClient:
                 if not matches:
                     img_pattern = r'<img[^>]+src=["\']([^"\']*zendesk[^"\']*attachments[^"\']*)["\'][^>]*>'
                     matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
+                
+                if matches:
+                    print(f"Found {len(matches)} inline image(s) in comment {comment_id} for ticket {ticket_id}")
                 
                 for match in matches:
                     img_url = match.group(1)
@@ -250,7 +256,10 @@ class ZendeskClient:
                         })
                     else:
                         # Log when we find an inline image but can't match it to an attachment
-                        print(f"Warning: Found inline image in ticket {ticket_id}, comment {comment_id}, but could not match to attachment. URL: {img_url}")
+                        print(f"  ✗ Warning: Found inline image in ticket {ticket_id}, comment {comment_id}, but could not match to attachment.")
+                        print(f"    Image URL: {img_url}")
+                        print(f"    Available attachments in comment: {[att.get('id') for att in comment.get('attachments', [])]}")
+                        print(f"    Attachment URLs: {[att.get('content_url', '')[:80] for att in comment.get('attachments', [])]}")
         except requests.exceptions.RequestException as e:
             print(f"Error fetching inline images for ticket {ticket_id}: {e}")
         

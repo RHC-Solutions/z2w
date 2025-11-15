@@ -150,17 +150,21 @@ class AttachmentOffloader:
         
         # Get attachments for this ticket (now includes comment_id)
         attachments = self.zendesk.get_ticket_attachments(ticket_id)
+        print(f"Found {len(attachments)} regular attachments for ticket {ticket_id}")
         
         # Get inline images from comments
         inline_images = self.zendesk.get_inline_images(ticket_id)
+        print(f"Found {len(inline_images)} inline images for ticket {ticket_id}")
         
         # Create a set of inline image attachment IDs to avoid processing them twice
         inline_attachment_ids = {img.get("attachment_id") for img in inline_images if img.get("attachment_id")}
+        print(f"Inline image attachment IDs: {inline_attachment_ids}")
         
         # Process regular attachments (excluding inline images)
         for attachment in attachments:
             # Skip if this attachment is an inline image (will be processed separately)
             if attachment.get("id") in inline_attachment_ids:
+                print(f"Skipping attachment {attachment.get('id')} - it's an inline image, will be processed separately")
                 continue
             attachment_url = attachment.get("content_url")
             attachment_id = attachment.get("id")
