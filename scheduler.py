@@ -6,6 +6,8 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
 from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
+from telegram_reporter import TelegramReporter
+from slack_reporter import SlackReporter
 from database import get_db, OffloadLog
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
 import logging
@@ -20,6 +22,8 @@ class OffloadScheduler:
         self.scheduler = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
         self.offloader = AttachmentOffloader()
         self.email_reporter = EmailReporter()
+        self.telegram_reporter = TelegramReporter()
+        self.slack_reporter = SlackReporter()
     
     def scheduled_job(self):
         """Job to run daily at 00:00 GMT"""
@@ -29,8 +33,13 @@ class OffloadScheduler:
         # Run offload
         summary = self.offloader.run_offload()
         
-        # Send email report
+        # Send reports to all configured channels
         email_sent = self.email_reporter.send_report(summary)
+        telegram_sent = self.telegram_reporter.send_report(summary)
+        slack_sent = self.slack_reporter.send_report(summary)
+        
+        # Log report sending status
+        logger.info(f"Reports sent - Email: {email_sent}, Telegram: {telegram_sent}, Slack: {slack_sent}")
         
         # Update log entry
         db = get_db()
@@ -38,7 +47,8 @@ class OffloadScheduler:
             if summary.get("log_id"):
                 log_entry = db.query(OffloadLog).filter_by(id=summary["log_id"]).first()
                 if log_entry:
-                    log_entry.report_sent = email_sent
+                    # Mark as sent if at least one channel succeeded
+                    log_entry.report_sent = email_sent or telegram_sent or slack_sent
                     db.commit()
         finally:
             db.close()

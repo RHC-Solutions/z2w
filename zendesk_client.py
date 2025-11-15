@@ -3,6 +3,7 @@ Zendesk API client for fetching tickets and attachments
 """
 import requests
 import base64
+import re
 from typing import List, Dict, Optional
 from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
 
@@ -105,11 +106,99 @@ class ZendeskClient:
                     # Add comment_id to attachment for later reference
                     attachment_with_comment = attachment.copy()
                     attachment_with_comment["comment_id"] = comment_id
+                    attachment_with_comment["is_inline"] = False  # Regular attachment
                     attachments.append(attachment_with_comment)
         except requests.exceptions.RequestException as e:
             print(f"Error fetching attachments for ticket {ticket_id}: {e}")
         
         return attachments
+    
+    def get_inline_images(self, ticket_id: int) -> List[Dict]:
+        """
+        Get all inline images from ticket comments
+        Returns list of inline image dicts with comment_id and image info
+        Inline images are images embedded in comment HTML, not regular attachments
+        """
+        if not self.base_url:
+            return []
+        
+        inline_images = []
+        url = f"{self.base_url}/tickets/{ticket_id}/comments.json"
+        
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Extract inline images from all comments
+            for comment in data.get("comments", []):
+                comment_id = comment.get("id")
+                comment_body = comment.get("body", "")
+                
+                if not comment_body:
+                    continue
+                
+                # Find all inline images in HTML
+                # Pattern: <img src="https://subdomain.zendesk.com/attachments/..." />
+                # or <img src="/attachments/..." />
+                # Also handle data URLs and other formats
+                img_pattern = r'<img[^>]+src=["\']([^"\']*attachments[^"\']*)["\'][^>]*>'
+                matches = re.finditer(img_pattern, comment_body, re.IGNORECASE)
+                
+                for match in matches:
+                    img_url = match.group(1)
+                    original_html = match.group(0)
+                    
+                    # Convert relative URLs to absolute
+                    if img_url.startswith('/'):
+                        img_url = f"https://{self.subdomain}.zendesk.com{img_url}"
+                    
+                    # Extract attachment token/ID from URL
+                    # URL format: https://subdomain.zendesk.com/attachments/token/TOKEN/filename
+                    # or https://subdomain.zendesk.com/attachments/attachment_id
+                    attachment_id = None
+                    filename = "inline_image.png"
+                    content_type = "image/png"
+                    
+                    # Try to find the attachment in the comment's attachments list
+                    # Match by URL pattern or attachment ID
+                    for att in comment.get("attachments", []):
+                        att_url = att.get("content_url", "")
+                        att_id = att.get("id")
+                        
+                        # Check if this attachment matches the inline image URL
+                        if img_url in att_url or att_url in img_url:
+                            attachment_id = att_id
+                            filename = att.get("file_name", "inline_image.png")
+                            content_type = att.get("content_type", "image/png")
+                            break
+                        
+                        # Also try matching by extracting ID from URL
+                        if '/attachments/' in img_url:
+                            # Try to extract numeric ID from URL
+                            id_match = re.search(r'/attachments/(\d+)', img_url)
+                            if id_match and str(att_id) == id_match.group(1):
+                                attachment_id = att_id
+                                filename = att.get("file_name", "inline_image.png")
+                                content_type = att.get("content_type", "image/png")
+                                break
+                    
+                    # If we found an attachment ID, add it to the list
+                    if attachment_id:
+                        inline_images.append({
+                            "attachment_id": attachment_id,
+                            "comment_id": comment_id,
+                            "content_url": img_url,
+                            "file_name": filename,
+                            "content_type": content_type,
+                            "is_inline": True,
+                            "original_html": original_html,
+                            "comment_body": comment_body
+                        })
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching inline images for ticket {ticket_id}: {e}")
+        
+        return inline_images
     
     def get_ticket_comments(self, ticket_id: int) -> List[Dict]:
         """
@@ -129,6 +218,54 @@ class ZendeskClient:
         except requests.exceptions.RequestException as e:
             print(f"Error fetching comments for ticket {ticket_id}: {e}")
             return []
+    
+    def replace_inline_image_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
+        """
+        Replace an inline image in a comment with a Wasabi link
+        Since Zendesk API doesn't allow updating existing comments directly,
+        we'll add a new comment with the Wasabi link and then delete the inline image
+        """
+        if not self.base_url:
+            return False
+        
+        url = f"{self.base_url}/tickets/{ticket_id}.json"
+        
+        try:
+            # Get the original comment to check if it's public or private
+            comments = self.get_ticket_comments(ticket_id)
+            original_comment = None
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    original_comment = comment
+                    break
+            
+            is_public = True
+            if original_comment:
+                is_public = original_comment.get("public", True)
+            
+            # Create a new comment with the Wasabi link
+            # Format: [Image Secured: filename (link)]
+            wasabi_link_text = f"[Image Secured: {filename}]({wasabi_url})"
+            
+            # Add a new comment with the Wasabi link
+            update_data = {
+                "ticket": {
+                    "comment": {
+                        "body": wasabi_link_text,
+                        "public": is_public
+                    }
+                }
+            }
+            
+            response = self.session.put(url, json=update_data)
+            response.raise_for_status()
+            
+            # Now redact (delete) the inline image attachment
+            return self.delete_attachment(ticket_id, comment_id, attachment_id)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error replacing inline image {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}")
+            return False
     
     def replace_attachment_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str) -> bool:
         """

@@ -70,6 +70,7 @@ class EmailReporter:
                     <li><strong>Tickets Found:</strong> {summary.get('tickets_found', 0)}</li>
                     <li><strong>Tickets Processed:</strong> {summary['tickets_processed']}</li>
                     <li><strong>Attachments Uploaded:</strong> {summary['attachments_uploaded']}</li>
+                    <li><strong>Attachments Deleted:</strong> {summary.get('attachments_deleted', 0)}</li>
                     <li><strong>Errors:</strong> {len(summary['errors'])}</li>
                 </ul>
             </div>

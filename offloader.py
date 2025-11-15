@@ -52,6 +52,7 @@ class AttachmentOffloader:
             "run_date": datetime.utcnow(),
             "tickets_processed": 0,
             "attachments_uploaded": 0,
+            "attachments_deleted": 0,
             "errors": [],
             "details": [],
             "tickets_found": 0
@@ -85,6 +86,7 @@ class AttachmentOffloader:
                     result = self.process_ticket(ticket_id)
                     summary["tickets_processed"] += 1
                     summary["attachments_uploaded"] += result["attachments_uploaded"]
+                    summary["attachments_deleted"] += result.get("attachments_deleted", 0)
                     summary["details"].append(result)
                     
                     # Extract S3 keys from uploaded files
@@ -135,8 +137,8 @@ class AttachmentOffloader:
     
     def process_ticket(self, ticket_id: int) -> Dict:
         """
-        Process a single ticket and upload its attachments
-        After uploading to Wasabi, replaces attachment in Zendesk with Wasabi link and deletes the attachment
+        Process a single ticket and upload its attachments and inline images
+        After uploading to Wasabi, replaces attachments/images in Zendesk with Wasabi links and deletes them
         """
         result = {
             "ticket_id": ticket_id,
@@ -149,7 +151,17 @@ class AttachmentOffloader:
         # Get attachments for this ticket (now includes comment_id)
         attachments = self.zendesk.get_ticket_attachments(ticket_id)
         
+        # Get inline images from comments
+        inline_images = self.zendesk.get_inline_images(ticket_id)
+        
+        # Create a set of inline image attachment IDs to avoid processing them twice
+        inline_attachment_ids = {img.get("attachment_id") for img in inline_images if img.get("attachment_id")}
+        
+        # Process regular attachments (excluding inline images)
         for attachment in attachments:
+            # Skip if this attachment is an inline image (will be processed separately)
+            if attachment.get("id") in inline_attachment_ids:
+                continue
             attachment_url = attachment.get("content_url")
             attachment_id = attachment.get("id")
             comment_id = attachment.get("comment_id")
@@ -209,6 +221,69 @@ class AttachmentOffloader:
             
             except Exception as e:
                 result["errors"].append(f"Error processing {filename}: {str(e)}")
+        
+        # Process inline images
+        for inline_image in inline_images:
+            attachment_url = inline_image.get("content_url")
+            attachment_id = inline_image.get("attachment_id")
+            comment_id = inline_image.get("comment_id")
+            filename = inline_image.get("file_name", "inline_image.png")
+            content_type = inline_image.get("content_type", "image/png")
+            original_html = inline_image.get("original_html", "")
+            
+            if not attachment_url or not attachment_id:
+                continue
+            
+            try:
+                # Download inline image
+                image_data = self.zendesk.download_attachment(attachment_url)
+                
+                if image_data:
+                    # Upload to Wasabi
+                    s3_key = self.wasabi.upload_attachment(
+                        ticket_id=ticket_id,
+                        attachment_data=image_data,
+                        original_filename=filename,
+                        content_type=content_type
+                    )
+                    
+                    if s3_key:
+                        result["attachments_uploaded"] += 1
+                        result["uploaded_files"].append({
+                            "original": filename,
+                            "s3_key": s3_key
+                        })
+                        
+                        # Get Wasabi URL using the same method as in tickets view
+                        wasabi_url = self.wasabi.get_file_url(s3_key, expires_in=31536000)  # 1 year expiration
+                        
+                        if wasabi_url and attachment_id and comment_id and original_html:
+                            # Replace inline image in comment with Wasabi link and delete it
+                            success = self.zendesk.replace_inline_image_in_comment(
+                                ticket_id=ticket_id,
+                                comment_id=comment_id,
+                                attachment_id=attachment_id,
+                                wasabi_url=wasabi_url,
+                                filename=filename,
+                                original_html=original_html
+                            )
+                            
+                            if success:
+                                result["attachments_deleted"] += 1
+                                print(f"Replaced inline image {filename} with Wasabi link and deleted from Zendesk")
+                            else:
+                                result["errors"].append(f"Failed to replace/delete inline image {filename} in Zendesk")
+                        elif not wasabi_url:
+                            result["errors"].append(f"Failed to generate Wasabi URL for inline image {filename}")
+                        else:
+                            result["errors"].append(f"Missing required data for inline image {filename}")
+                    else:
+                        result["errors"].append(f"Failed to upload inline image {filename}")
+                else:
+                    result["errors"].append(f"Failed to download inline image {filename}")
+            
+            except Exception as e:
+                result["errors"].append(f"Error processing inline image {filename}: {str(e)}")
         
         return result
     

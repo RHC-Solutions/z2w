@@ -237,6 +237,9 @@ def settings():
             'SMTP_USERNAME': os.getenv('SMTP_USERNAME', ''),
             'SMTP_PASSWORD': os.getenv('SMTP_PASSWORD', ''),
             'REPORT_EMAIL': os.getenv('REPORT_EMAIL', 'it@go4rex.com'),
+            'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN', ''),
+            'TELEGRAM_CHAT_ID': os.getenv('TELEGRAM_CHAT_ID', ''),
+            'SLACK_WEBHOOK_URL': os.getenv('SLACK_WEBHOOK_URL', ''),
         }
         
         # Merge with database settings (database takes priority)
