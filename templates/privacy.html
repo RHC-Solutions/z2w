@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Privacy Policy - Zendesk Offloader Admin{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="h2 mb-4">Privacy Policy</h1>
+    
+    <div class="card">
+        <div class="card-body">
+            <p class="text-muted">Last updated: January 2025</p>
+            
+            <h3>1. Introduction</h3>
+            <p>
+                RHC Solutions ("we", "our", or "us") operates the Zendesk Offloader application. 
+                This Privacy Policy informs you of our policies regarding the collection, use, and 
+                disclosure of personal data when you use our service.
+            </p>
+            
+            <h3>2. Information We Collect</h3>
+            <p>We collect the following types of information:</p>
+            <ul>
+                <li><strong>Configuration Data:</strong> Zendesk credentials, Wasabi B2 credentials, 
+                    and other configuration settings necessary for the application to function.</li>
+                <li><strong>Usage Data:</strong> Information about how you access and use the service, 
+                    including processed tickets, attachments, and execution logs.</li>
+                <li><strong>Session Data:</strong> Login session information for authentication purposes.</li>
+            </ul>
+            
+            <h3>3. How We Use Your Information</h3>
+            <p>We use the collected information for the following purposes:</p>
+            <ul>
+                <li>To provide and maintain our service</li>
+                <li>To process and offload Zendesk ticket attachments to Wasabi B2 storage</li>
+                <li>To send reports via configured channels (email, Telegram, Slack)</li>
+                <li>To monitor and analyze usage patterns</li>
+                <li>To detect and prevent technical issues</li>
+            </ul>
+            
+            <h3>4. Data Storage and Security</h3>
+            <p>
+                All data is stored locally on your server. We do not transmit your credentials or 
+                sensitive data to external servers except as necessary to:
+            </p>
+            <ul>
+                <li>Connect to your Zendesk instance</li>
+                <li>Upload files to your Wasabi B2 storage</li>
+                <li>Send reports to your configured notification channels</li>
+            </ul>
+            <p>
+                We implement appropriate technical and organizational measures to protect your data 
+                against unauthorized access, alteration, disclosure, or destruction.
+            </p>
+            
+            <h3>5. Data Retention</h3>
+            <p>
+                We retain your data for as long as necessary to provide the service. Processed ticket 
+                records and execution logs are stored in the local database. Log files are automatically 
+                archived after 7 days, but you can configure this retention period.
+            </p>
+            
+            <h3>6. Your Rights</h3>
+            <p>You have the right to:</p>
+            <ul>
+                <li>Access your personal data stored in the application</li>
+                <li>Modify or update your configuration data</li>
+                <li>Delete your data by removing the application and database</li>
+                <li>Export your data from the database</li>
+            </ul>
+            
+            <h3>7. Third-Party Services</h3>
+            <p>
+                Our service integrates with third-party services including Zendesk, Wasabi B2, 
+                email providers, Telegram, and Slack. Your use of these services is subject to 
+                their respective privacy policies.
+            </p>
+            
+            <h3>8. Changes to This Privacy Policy</h3>
+            <p>
+                We may update our Privacy Policy from time to time. We will notify you of any 
+                changes by posting the new Privacy Policy on this page and updating the "Last updated" 
+                date.
+            </p>
+            
+            <h3>9. Contact Us</h3>
+            <p>
+                If you have any questions about this Privacy Policy, please contact us:
+            </p>
+            <ul>
+                <li>Telegram: <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer">@rhcsolutions</a></li>
+                <li>Website: <a href="https://rhcsolutions.com" target="_blank" rel="noopener noreferrer">https://rhcsolutions.com</a></li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

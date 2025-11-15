@@ -8,6 +8,14 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .container-fluid {
+            flex: 1;
+        }
         .sidebar {
             min-height: 100vh;
             background-color: #343a40;
@@ -22,13 +30,22 @@
             color: #fff;
             background-color: #495057;
         }
+        footer a {
+            color: #6c757d;
+        }
+        footer a:hover {
+            color: #495057;
+        }
     </style>
 </head>
 <body>
     <div class="container-fluid">
         <div class="row">
             <nav class="col-md-2 sidebar p-3">
-                <h4 class="text-white mb-4">Zendesk Offloader</h4>
+                <div class="d-flex align-items-center mb-4">
+                    <img src="{{ url_for('static', filename='logo.svg') }}" alt="Logo" class="me-2" style="width: 32px; height: 32px;">
+                    <h4 class="text-white mb-0">Zendesk Offloader</h4>
+                </div>
                 <ul class="nav flex-column">
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('index') }}">
@@ -63,7 +80,7 @@
                         {% for category, message in messages %}
                             <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
                                 {{ message }}
-                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                             </div>
                         {% endfor %}
                     {% endif %}
@@ -72,6 +89,24 @@
             </main>
         </div>
     </div>
+    <footer class="bg-light border-top mt-auto py-3">
+        <div class="container-fluid">
+            <div class="row">
+                <div class="col-md-12 text-center">
+                    <p class="mb-2 text-muted">
+                        &copy; 2025 RHC Solutions. All rights reserved.
+                    </p>
+                    <p class="mb-0">
+                        <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer" class="text-decoration-none me-3">
+                            <i class="bi bi-telegram"></i> Support
+                        </a>
+                        <a href="{{ url_for('privacy') }}" class="text-decoration-none me-3">Privacy Policy</a>
+                        <a href="{{ url_for('cookies') }}" class="text-decoration-none">Cookie Policy</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </footer>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}
 </body>

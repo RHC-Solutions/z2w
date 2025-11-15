@@ -6,4 +6,5 @@ python-dotenv==1.0.0
 sqlalchemy>=2.0.44
 werkzeug==3.0.1
 Pillow>=10.0.0
+sqlalchemy==2.0.44
 

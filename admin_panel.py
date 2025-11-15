@@ -473,6 +473,16 @@ def logs():
     finally:
         db.close()
 
+@app.route('/privacy')
+def privacy():
+    """Privacy Policy page"""
+    return render_template('privacy.html')
+
+@app.route('/cookies')
+def cookies():
+    """Cookie Policy page"""
+    return render_template('cookies.html')
+
 @app.route('/api/test_connection', methods=['POST'])
 @login_required
 def test_connection():
