@@ -18,7 +18,12 @@
         <tbody>
             {% for ticket in tickets.items %}
             <tr>
-                <td>{{ ticket.ticket_id }}</td>
+                <td>
+                    {{ ticket.ticket_id }}
+                    <button class="btn btn-sm btn-outline-secondary ms-2" onclick="reprocessTicket({{ ticket.ticket_id }})" title="Reprocess this ticket">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </td>
                 <td>{{ ticket.processed_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                 <td>{{ ticket.attachments_count }}</td>
                 <td>
@@ -63,6 +68,48 @@
         </ul>
     </nav>
 </div>
+
+<script>
+function reprocessTicket(ticketId) {
+    if (!confirm(`Reprocess ticket #${ticketId}? This will remove it from the processed list and process it again, including any inline images.`)) {
+        return;
+    }
+    
+    fetch('/api/reprocess_ticket', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticket_id: ticketId})
+    })
+    .then(r => {
+        const contentType = r.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            return r.json();
+        } else {
+            return r.text().then(text => {
+                throw new Error('Server returned an error. Please check the console for details.');
+            });
+        }
+    })
+    .then(data => {
+        if (data.success) {
+            if (data.warning) {
+                alert('⚠️ ' + data.message + '\n\nCheck the console for details.');
+                console.log('Reprocess details:', data.details);
+            } else {
+                alert('✅ ' + data.message);
+            }
+            // Reload page to show updated data
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ ' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Reprocess error:', error);
+        alert('❌ Error: ' + error.message);
+    });
+}
+</script>
 {% endblock %}
 
 

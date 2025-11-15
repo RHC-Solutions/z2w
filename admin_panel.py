@@ -804,6 +804,73 @@ def run_now():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+@app.route('/api/reprocess_ticket', methods=['POST'])
+@login_required
+def reprocess_ticket():
+    """Reprocess a specific ticket (useful for tickets with inline images that weren't processed)"""
+    try:
+        ticket_id = request.json.get('ticket_id')
+        if not ticket_id:
+            return jsonify({'success': False, 'message': 'ticket_id is required'}), 400
+        
+        ticket_id = int(ticket_id)
+        
+        # Remove ticket from processed list if it exists
+        db = get_db()
+        try:
+            processed_ticket = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+            if processed_ticket:
+                db.delete(processed_ticket)
+                db.commit()
+                print(f"Removed ticket {ticket_id} from processed list for reprocessing")
+        finally:
+            db.close()
+        
+        # Process the ticket
+        from offloader import AttachmentOffloader
+        offloader = AttachmentOffloader()
+        result = offloader.process_ticket(ticket_id)
+        
+        # Mark as processed again
+        db = get_db()
+        try:
+            import json
+            s3_keys = [file_info["s3_key"] for file_info in result.get("uploaded_files", [])]
+            wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
+            
+            processed_ticket = ProcessedTicket(
+                ticket_id=ticket_id,
+                attachments_count=result["attachments_uploaded"],
+                status="processed" if len(result.get("errors", [])) == 0 else "error",
+                wasabi_files=wasabi_files_json,
+                error_message="; ".join(result.get("errors", [])) if result.get("errors") else None
+            )
+            db.add(processed_ticket)
+            db.commit()
+        finally:
+            db.close()
+        
+        if result.get("errors"):
+            return jsonify({
+                'success': True,
+                'message': f'Ticket {ticket_id} reprocessed. Uploaded: {result["attachments_uploaded"]}, Deleted: {result.get("attachments_deleted", 0)}, Errors: {len(result["errors"])}',
+                'details': result,
+                'warning': True
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': f'Ticket {ticket_id} reprocessed successfully. Uploaded: {result["attachments_uploaded"]}, Deleted: {result.get("attachments_deleted", 0)}',
+                'details': result
+            })
+    except ValueError:
+        return jsonify({'success': False, 'message': 'Invalid ticket_id. Must be a number.'}), 400
+    except Exception as e:
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'Error reprocessing ticket: {str(e)}', exc_info=True)
+        return jsonify({'success': False, 'message': f'Error reprocessing ticket: {str(e)}'}), 500
+
 @app.route('/api/scheduler/start', methods=['POST'])
 @login_required
 def start_scheduler():

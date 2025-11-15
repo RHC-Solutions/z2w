@@ -141,9 +141,14 @@ class ZendeskClient:
                 # Find all inline images in HTML
                 # Pattern: <img src="https://subdomain.zendesk.com/attachments/..." />
                 # or <img src="/attachments/..." />
-                # Also handle data URLs and other formats
+                # Match img tags with attachments in src, including various formats
                 img_pattern = r'<img[^>]+src=["\']([^"\']*attachments[^"\']*)["\'][^>]*>'
-                matches = re.finditer(img_pattern, comment_body, re.IGNORECASE)
+                matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
+                
+                # If no matches with attachments pattern, try a more general pattern
+                if not matches:
+                    img_pattern = r'<img[^>]+src=["\']([^"\']*zendesk[^"\']*attachments[^"\']*)["\'][^>]*>'
+                    matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
                 
                 for match in matches:
                     img_url = match.group(1)
@@ -159,6 +164,7 @@ class ZendeskClient:
                     attachment_id = None
                     filename = "inline_image.png"
                     content_type = "image/png"
+                    attachment_content_url = None
                     
                     # Try to find the attachment in the comment's attachments list
                     # Match by URL pattern or attachment ID
@@ -166,14 +172,32 @@ class ZendeskClient:
                         att_url = att.get("content_url", "")
                         att_id = att.get("id")
                         
+                        if not att_url or not att_id:
+                            continue
+                        
                         # Check if this attachment matches the inline image URL
-                        if img_url in att_url or att_url in img_url:
+                        # Normalize URLs for comparison (remove query params, etc.)
+                        img_url_normalized = img_url.split('?')[0].rstrip('/')
+                        att_url_normalized = att_url.split('?')[0].rstrip('/')
+                        
+                        # Direct match
+                        if img_url_normalized == att_url_normalized:
                             attachment_id = att_id
                             filename = att.get("file_name", "inline_image.png")
                             content_type = att.get("content_type", "image/png")
+                            attachment_content_url = att_url  # Use the API's content_url for downloading
                             break
                         
-                        # Also try matching by extracting ID from URL
+                        # Substring match (one URL contains the other)
+                        if img_url_normalized in att_url_normalized or att_url_normalized in img_url_normalized:
+                            attachment_id = att_id
+                            filename = att.get("file_name", "inline_image.png")
+                            content_type = att.get("content_type", "image/png")
+                            attachment_content_url = att_url
+                            break
+                        
+                        # Try matching by extracting ID from URL
+                        # URL format: /attachments/12345 or /attachments/token/TOKEN/filename
                         if '/attachments/' in img_url:
                             # Try to extract numeric ID from URL
                             id_match = re.search(r'/attachments/(\d+)', img_url)
@@ -181,20 +205,52 @@ class ZendeskClient:
                                 attachment_id = att_id
                                 filename = att.get("file_name", "inline_image.png")
                                 content_type = att.get("content_type", "image/png")
+                                attachment_content_url = att_url
+                                break
+                            
+                            # Try matching by token in URL
+                            # URL format: /attachments/token/TOKEN/filename
+                            token_match = re.search(r'/attachments/token/([^/]+)', img_url)
+                            if token_match:
+                                token = token_match.group(1)
+                                # Check if attachment URL contains this token
+                                if token in att_url:
+                                    attachment_id = att_id
+                                    filename = att.get("file_name", "inline_image.png")
+                                    content_type = att.get("content_type", "image/png")
+                                    attachment_content_url = att_url
+                                    break
+                        
+                        # Try matching by filename in URL
+                        # Extract filename from img_url and compare with attachment filename
+                        filename_match = re.search(r'/([^/]+\.(jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
+                        if filename_match:
+                            url_filename = filename_match.group(1)
+                            att_filename = att.get("file_name", "")
+                            if url_filename.lower() == att_filename.lower():
+                                attachment_id = att_id
+                                filename = att_filename
+                                content_type = att.get("content_type", "image/png")
+                                attachment_content_url = att_url
                                 break
                     
                     # If we found an attachment ID, add it to the list
                     if attachment_id:
+                        # Use the attachment's content_url from API for downloading, not the img src URL
+                        download_url = attachment_content_url if attachment_content_url else img_url
                         inline_images.append({
                             "attachment_id": attachment_id,
                             "comment_id": comment_id,
-                            "content_url": img_url,
+                            "content_url": download_url,  # Use API content_url for reliable downloading
                             "file_name": filename,
                             "content_type": content_type,
                             "is_inline": True,
                             "original_html": original_html,
                             "comment_body": comment_body
                         })
+                    else:
+                        # Log when we find an inline image but can't match it to an attachment
+                        print(f"Warning: Found inline image in ticket {ticket_id}, comment {comment_id}, but could not match to attachment. URL: {img_url}")
         except requests.exceptions.RequestException as e:
             print(f"Error fetching inline images for ticket {ticket_id}: {e}")
         
@@ -223,15 +279,14 @@ class ZendeskClient:
         """
         Replace an inline image in a comment with a Wasabi link
         Since Zendesk API doesn't allow updating existing comments directly,
-        we'll add a new comment with the Wasabi link and then delete the inline image
+        we'll replace the image in the comment body and add a new comment with the modified body,
+        then delete the inline image from the original comment
         """
         if not self.base_url:
             return False
         
-        url = f"{self.base_url}/tickets/{ticket_id}.json"
-        
         try:
-            # Get the original comment to check if it's public or private
+            # Get the original comment to get its full body and visibility
             comments = self.get_ticket_comments(ticket_id)
             original_comment = None
             for comment in comments:
@@ -239,32 +294,98 @@ class ZendeskClient:
                     original_comment = comment
                     break
             
-            is_public = True
-            if original_comment:
-                is_public = original_comment.get("public", True)
+            if not original_comment:
+                print(f"Comment {comment_id} not found for ticket {ticket_id}")
+                return False
             
-            # Create a new comment with the Wasabi link
-            # Format: [Image Secured: filename (link)]
-            wasabi_link_text = f"[Image Secured: {filename}]({wasabi_url})"
+            comment_body = original_comment.get("body", "")
+            is_public = original_comment.get("public", True)
             
-            # Add a new comment with the Wasabi link
-            update_data = {
-                "ticket": {
-                    "comment": {
-                        "body": wasabi_link_text,
-                        "public": is_public
+            # Replace the inline image HTML with a Wasabi link
+            # Create a link in markdown format: [filename](wasabi_url)
+            wasabi_link = f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a>'
+            
+            # Replace the original <img> tag with the Wasabi link
+            # Use re.escape to handle special characters in original_html
+            import re
+            escaped_html = re.escape(original_html)
+            modified_body = re.sub(escaped_html, wasabi_link, comment_body, flags=re.IGNORECASE)
+            
+            # If the replacement didn't work (maybe HTML was slightly different), try a more flexible approach
+            if modified_body == comment_body:
+                # Try to find and replace just the img tag more flexibly
+                # Pattern: <img ... src="..." ... />
+                img_pattern = r'<img[^>]*src=["\']' + re.escape(original_html.split('src="')[1].split('"')[0] if 'src="' in original_html else '') + r'["\'][^>]*>'
+                modified_body = re.sub(img_pattern, wasabi_link, comment_body, flags=re.IGNORECASE)
+            
+            # If still no change, try replacing just the src URL
+            if modified_body == comment_body:
+                # Extract the src URL from original_html
+                src_match = re.search(r'src=["\']([^"\']*)["\']', original_html, re.IGNORECASE)
+                if src_match:
+                    src_url = src_match.group(1)
+                    # Replace any img tag with this src
+                    img_pattern = r'<img[^>]*src=["\']' + re.escape(src_url) + r'["\'][^>]*>'
+                    modified_body = re.sub(img_pattern, wasabi_link, comment_body, flags=re.IGNORECASE)
+            
+            # If we successfully modified the body, add a new comment with the modified content
+            if modified_body != comment_body:
+                url = f"{self.base_url}/tickets/{ticket_id}.json"
+                
+                # Add a new comment with the modified body (replacing inline image with link)
+                update_data = {
+                    "ticket": {
+                        "comment": {
+                            "body": modified_body,
+                            "public": is_public
+                        }
                     }
                 }
-            }
+                
+                response = self.session.put(url, json=update_data)
+                response.raise_for_status()
+                print(f"Added new comment with Wasabi link replacing inline image in comment {comment_id}")
+            else:
+                # Fallback: just add a simple link comment
+                url = f"{self.base_url}/tickets/{ticket_id}.json"
+                wasabi_link_text = f'<p><a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">Image: {filename}</a></p>'
+                
+                update_data = {
+                    "ticket": {
+                        "comment": {
+                            "body": wasabi_link_text,
+                            "public": is_public
+                        }
+                    }
+                }
+                
+                response = self.session.put(url, json=update_data)
+                response.raise_for_status()
+                print(f"Added new comment with Wasabi link for inline image (could not modify original comment)")
             
-            response = self.session.put(url, json=update_data)
-            response.raise_for_status()
+            # Now redact (delete) the inline image attachment from the original comment
+            print(f"Attempting to delete inline image attachment {attachment_id} from comment {comment_id} in ticket {ticket_id}")
+            delete_success = self.delete_attachment(ticket_id, comment_id, attachment_id)
             
-            # Now redact (delete) the inline image attachment
-            return self.delete_attachment(ticket_id, comment_id, attachment_id)
+            if delete_success:
+                print(f"✓ Successfully deleted inline image attachment {attachment_id} from Zendesk")
+            else:
+                print(f"✗ Failed to delete inline image attachment {attachment_id} from Zendesk")
+            
+            return delete_success
             
         except requests.exceptions.RequestException as e:
-            print(f"Error replacing inline image {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}")
+            error_msg = f"Error replacing inline image {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}"
+            print(f"✗ {error_msg}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"   Response status: {e.response.status_code}")
+                print(f"   Response text: {e.response.text[:500]}")
+            return False
+        except Exception as e:
+            error_msg = f"Unexpected error replacing inline image {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}"
+            print(f"✗ {error_msg}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def replace_attachment_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str) -> bool:
@@ -321,36 +442,62 @@ class ZendeskClient:
         Uses Zendesk's Redact API which replaces the attachment with a redacted.txt file
         """
         if not self.base_url:
+            print(f"ERROR: Cannot delete attachment - base_url not set")
             return False
         
         # Zendesk Redact API endpoint
         url = f"{self.base_url}/tickets/{ticket_id}/comments/{comment_id}/attachments/{attachment_id}/redact.json"
         
+        print(f"Redacting attachment {attachment_id} from comment {comment_id} in ticket {ticket_id}")
+        print(f"  URL: {url}")
+        
         try:
             # Redact API requires PUT request with empty body
             response = self.session.put(url, json={})
             response.raise_for_status()
+            print(f"✓ Successfully redacted attachment {attachment_id}")
             return True
         except requests.exceptions.HTTPError as e:
             # Check if it's a 404 (attachment might already be deleted) or other error
             if e.response.status_code == 404:
-                print(f"Attachment {attachment_id} not found (may already be deleted)")
+                print(f"Attachment {attachment_id} not found (may already be deleted) - considering success")
                 return True  # Consider it successful if already gone
-            error_msg = f"HTTP Error redacting attachment {attachment_id}: {e.response.status_code} - {e.response.text}"
-            print(f"ERROR: {error_msg}")
-            return False
+            elif e.response.status_code == 403:
+                error_msg = f"Permission denied (403) when redacting attachment {attachment_id}. Check API permissions."
+                print(f"ERROR: {error_msg}")
+                print(f"   Response: {e.response.text[:500]}")
+                return False
+            else:
+                error_msg = f"HTTP Error {e.response.status_code} redacting attachment {attachment_id}: {e.response.text[:500]}"
+                print(f"ERROR: {error_msg}")
+                return False
         except requests.exceptions.RequestException as e:
-            print(f"Error redacting attachment {attachment_id}: {e}")
+            print(f"ERROR: Request exception when redacting attachment {attachment_id}: {e}")
             return False
     
     def download_attachment(self, attachment_url: str) -> Optional[bytes]:
         """
         Download attachment content
+        Handles both regular attachment URLs and inline image URLs
         """
         try:
-            response = self.session.get(attachment_url)
+            # Ensure URL is absolute
+            if attachment_url.startswith('/'):
+                attachment_url = f"https://{self.subdomain}.zendesk.com{attachment_url}"
+            
+            # Use the session which has authentication
+            response = self.session.get(attachment_url, timeout=30)
             response.raise_for_status()
-            return response.content
+            
+            # Check if we got actual content
+            if response.content:
+                return response.content
+            else:
+                print(f"Warning: Empty content downloaded from {attachment_url}")
+                return None
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTP Error downloading attachment from {attachment_url}: {e.response.status_code} - {e.response.text[:200]}")
+            return None
         except requests.exceptions.RequestException as e:
             print(f"Error downloading attachment from {attachment_url}: {e}")
             return None

@@ -223,6 +223,7 @@ class AttachmentOffloader:
                 result["errors"].append(f"Error processing {filename}: {str(e)}")
         
         # Process inline images
+        print(f"Found {len(inline_images)} inline images to process for ticket {ticket_id}")
         for inline_image in inline_images:
             attachment_url = inline_image.get("content_url")
             attachment_id = inline_image.get("attachment_id")
@@ -232,14 +233,20 @@ class AttachmentOffloader:
             original_html = inline_image.get("original_html", "")
             
             if not attachment_url or not attachment_id:
+                print(f"Skipping inline image: missing attachment_url or attachment_id. URL: {attachment_url}, ID: {attachment_id}")
                 continue
+            
+            print(f"Processing inline image: {filename} (attachment_id: {attachment_id}, comment_id: {comment_id})")
             
             try:
                 # Download inline image
+                print(f"Downloading inline image from: {attachment_url}")
                 image_data = self.zendesk.download_attachment(attachment_url)
                 
                 if image_data:
+                    print(f"Downloaded {len(image_data)} bytes for inline image {filename}")
                     # Upload to Wasabi
+                    print(f"Uploading inline image {filename} to Wasabi...")
                     s3_key = self.wasabi.upload_attachment(
                         ticket_id=ticket_id,
                         attachment_data=image_data,
@@ -248,6 +255,7 @@ class AttachmentOffloader:
                     )
                     
                     if s3_key:
+                        print(f"Successfully uploaded inline image {filename} to Wasabi: {s3_key}")
                         result["attachments_uploaded"] += 1
                         result["uploaded_files"].append({
                             "original": filename,
@@ -258,6 +266,7 @@ class AttachmentOffloader:
                         wasabi_url = self.wasabi.get_file_url(s3_key, expires_in=31536000)  # 1 year expiration
                         
                         if wasabi_url and attachment_id and comment_id and original_html:
+                            print(f"Replacing inline image {filename} in Zendesk comment {comment_id} with Wasabi link...")
                             # Replace inline image in comment with Wasabi link and delete it
                             success = self.zendesk.replace_inline_image_in_comment(
                                 ticket_id=ticket_id,
@@ -270,17 +279,27 @@ class AttachmentOffloader:
                             
                             if success:
                                 result["attachments_deleted"] += 1
-                                print(f"Replaced inline image {filename} with Wasabi link and deleted from Zendesk")
+                                print(f"✓ Successfully replaced inline image {filename} with Wasabi link and deleted from Zendesk")
                             else:
-                                result["errors"].append(f"Failed to replace/delete inline image {filename} in Zendesk")
+                                error_msg = f"Failed to replace/delete inline image {filename} in Zendesk"
+                                result["errors"].append(error_msg)
+                                print(f"✗ {error_msg}")
                         elif not wasabi_url:
-                            result["errors"].append(f"Failed to generate Wasabi URL for inline image {filename}")
+                            error_msg = f"Failed to generate Wasabi URL for inline image {filename}"
+                            result["errors"].append(error_msg)
+                            print(f"✗ {error_msg}")
                         else:
-                            result["errors"].append(f"Missing required data for inline image {filename}")
+                            error_msg = f"Missing required data for inline image {filename} (wasabi_url: {bool(wasabi_url)}, attachment_id: {attachment_id}, comment_id: {comment_id}, original_html: {bool(original_html)})"
+                            result["errors"].append(error_msg)
+                            print(f"✗ {error_msg}")
                     else:
-                        result["errors"].append(f"Failed to upload inline image {filename}")
+                        error_msg = f"Failed to upload inline image {filename} to Wasabi"
+                        result["errors"].append(error_msg)
+                        print(f"✗ {error_msg}")
                 else:
-                    result["errors"].append(f"Failed to download inline image {filename}")
+                    error_msg = f"Failed to download inline image {filename} from {attachment_url}"
+                    result["errors"].append(error_msg)
+                    print(f"✗ {error_msg}")
             
             except Exception as e:
                 result["errors"].append(f"Error processing inline image {filename}: {str(e)}")
