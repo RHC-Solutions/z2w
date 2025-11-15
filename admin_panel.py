@@ -208,8 +208,50 @@ def settings():
 @login_required
 def tickets():
     """List processed tickets"""
+    import json
+    # Ensure database schema is up to date
+    try:
+        from database import _migrate_database
+        _migrate_database()
+    except Exception:
+        pass  # Migration already done or failed, continue anyway
+    
     db = get_db()
     try:
+        # Get settings from database for Wasabi client
+        settings_dict = {}
+        settings_list = db.query(Setting).all()
+        for s in settings_list:
+            settings_dict[s.key] = s.value
+        
+        # Get Wasabi configuration
+        from config import reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+        reload_config()
+        
+        endpoint = settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT
+        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+        
+        # Initialize Wasabi client for URL generation
+        wasabi_client = None
+        if endpoint and access_key and secret_key and bucket_name:
+            try:
+                endpoint = endpoint.strip() if endpoint else ""
+                if endpoint and not endpoint.startswith('http'):
+                    endpoint = f"https://{endpoint}"
+                wasabi_client = WasabiClient(
+                    endpoint=endpoint,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    bucket_name=bucket_name
+                )
+            except Exception as e:
+                # If Wasabi client fails, we'll just not show URLs
+                # Log the error but don't fail the page
+                print(f"Warning: Could not initialize Wasabi client: {e}")
+                pass
+        
         page = request.args.get('page', 1, type=int)
         per_page = 50
         
@@ -218,6 +260,32 @@ def tickets():
         tickets_query = db.query(ProcessedTicket).order_by(
             ProcessedTicket.processed_at.desc()
         ).offset((page - 1) * per_page).limit(per_page).all()
+        
+        # Generate URLs for each ticket's files
+        for ticket in tickets_query:
+            ticket.wasabi_urls = []
+            # Safely get wasabi_files attribute (may not exist in older database schemas)
+            wasabi_files = getattr(ticket, 'wasabi_files', None)
+            if wasabi_files and wasabi_client:
+                try:
+                    s3_keys = json.loads(wasabi_files)
+                    for s3_key in s3_keys:
+                        # Try presigned URL first, fallback to public URL
+                        try:
+                            url = wasabi_client.get_file_url(s3_key)
+                            if not url:
+                                url = wasabi_client.get_public_url(s3_key)
+                            if url:
+                                ticket.wasabi_urls.append({
+                                    'url': url,
+                                    'filename': s3_key.split('/')[-1] if '/' in s3_key else s3_key
+                                })
+                        except Exception:
+                            # Skip this file if URL generation fails
+                            pass
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    # Invalid JSON or missing attribute
+                    pass
         
         # Create pagination object
         class Pagination:
@@ -250,8 +318,41 @@ def tickets():
 @login_required
 def logs():
     """View offload logs"""
+    import json
     db = get_db()
     try:
+        # Get settings from database for Wasabi client
+        settings_dict = {}
+        settings_list = db.query(Setting).all()
+        for s in settings_list:
+            settings_dict[s.key] = s.value
+        
+        # Get Wasabi configuration
+        from config import reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+        reload_config()
+        
+        endpoint = settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT
+        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+        
+        # Initialize Wasabi client for URL generation
+        wasabi_client = None
+        if endpoint and access_key and secret_key and bucket_name:
+            try:
+                endpoint = endpoint.strip() if endpoint else ""
+                if endpoint and not endpoint.startswith('http'):
+                    endpoint = f"https://{endpoint}"
+                wasabi_client = WasabiClient(
+                    endpoint=endpoint,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    bucket_name=bucket_name
+                )
+            except Exception as e:
+                print(f"Warning: Could not initialize Wasabi client: {e}")
+                pass
+        
         page = request.args.get('page', 1, type=int)
         per_page = 20
         
@@ -260,6 +361,43 @@ def logs():
         logs_query = db.query(OffloadLog).order_by(
             OffloadLog.run_date.desc()
         ).offset((page - 1) * per_page).limit(per_page).all()
+        
+        # Generate URLs for each log's files
+        for log in logs_query:
+            log.wasabi_urls = []
+            if log.details and wasabi_client:
+                try:
+                    # Try to parse as JSON (new format)
+                    log_data = json.loads(log.details)
+                    if isinstance(log_data, dict) and "all_s3_keys" in log_data:
+                        for file_info in log_data["all_s3_keys"]:
+                            s3_key = file_info.get("s3_key")
+                            if s3_key:
+                                try:
+                                    url = wasabi_client.get_file_url(s3_key)
+                                    if not url:
+                                        url = wasabi_client.get_public_url(s3_key)
+                                    if url:
+                                        log.wasabi_urls.append({
+                                            'url': url,
+                                            'filename': file_info.get("original_filename", s3_key.split('/')[-1] if '/' in s3_key else s3_key),
+                                            'ticket_id': file_info.get("ticket_id")
+                                        })
+                                except Exception:
+                                    pass
+                    # Fallback: try to extract from old string format
+                    elif isinstance(log_data, str):
+                        # Old format - try to extract S3 keys from string representation
+                        # This is a fallback for older logs
+                        pass
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    # Invalid JSON or old format - try to parse as string
+                    try:
+                        # For old logs stored as string, we can't easily extract S3 keys
+                        # They would need to be reprocessed
+                        pass
+                    except Exception:
+                        pass
         
         # Create pagination object
         class Pagination:

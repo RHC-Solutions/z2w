@@ -3,6 +3,7 @@ Main offload logic for processing tickets and uploading attachments
 """
 from datetime import datetime
 from typing import Dict, List
+import json
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
 from database import get_db, ProcessedTicket, OffloadLog
@@ -86,11 +87,16 @@ class AttachmentOffloader:
                     summary["attachments_uploaded"] += result["attachments_uploaded"]
                     summary["details"].append(result)
                     
+                    # Extract S3 keys from uploaded files
+                    s3_keys = [file_info["s3_key"] for file_info in result.get("uploaded_files", [])]
+                    wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
+                    
                     # Mark ticket as processed in database
                     processed_ticket = ProcessedTicket(
                         ticket_id=ticket_id,
                         attachments_count=result["attachments_uploaded"],
-                        status="processed"
+                        status="processed",
+                        wasabi_files=wasabi_files_json
                     )
                     db.add(processed_ticket)
                     db.commit()
@@ -187,9 +193,41 @@ class AttachmentOffloader:
         # Process tickets
         summary = self.process_tickets()
         
+        # Collect all S3 keys from all processed tickets
+        all_s3_keys = []
+        for ticket_detail in summary.get("details", []):
+            if isinstance(ticket_detail, dict):
+                for file_info in ticket_detail.get("uploaded_files", []):
+                    if isinstance(file_info, dict) and "s3_key" in file_info:
+                        all_s3_keys.append({
+                            "ticket_id": ticket_detail.get("ticket_id"),
+                            "s3_key": file_info["s3_key"],
+                            "original_filename": file_info.get("original", "")
+                        })
+        
+        # Add S3 keys to summary for easy access
+        summary["all_s3_keys"] = all_s3_keys
+        
         # Create log entry
         db = get_db()
         try:
+            # Store summary as JSON for structured access
+            # Convert datetime and other non-serializable objects
+            def json_serializer(obj):
+                """JSON serializer for objects not serializable by default json code"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Type {type(obj)} not serializable")
+            
+            summary_for_storage = {
+                "run_date": summary["run_date"].isoformat() if isinstance(summary["run_date"], datetime) else str(summary["run_date"]),
+                "tickets_processed": summary["tickets_processed"],
+                "attachments_uploaded": summary["attachments_uploaded"],
+                "errors": summary["errors"],
+                "all_s3_keys": all_s3_keys,
+                "details": summary.get("details", [])
+            }
+            
             log_entry = OffloadLog(
                 run_date=summary["run_date"],
                 tickets_processed=summary["tickets_processed"],
@@ -197,7 +235,7 @@ class AttachmentOffloader:
                 errors_count=len(summary["errors"]),
                 status="completed" if len(summary["errors"]) == 0 else "completed_with_errors",
                 report_sent=False,
-                details=str(summary)
+                details=json.dumps(summary_for_storage)
             )
             
             db.add(log_entry)

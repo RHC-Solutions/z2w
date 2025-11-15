@@ -88,6 +88,64 @@ class WasabiClient:
             print(f"Error uploading {filename} to Wasabi: {e}")
             return None
     
+    def get_file_url(self, s3_key: str, expires_in: int = 3600) -> Optional[str]:
+        """
+        Generate a presigned URL for accessing a file in Wasabi
+        Returns the URL if successful, None otherwise
+        
+        Args:
+            s3_key: The S3 key (path) of the file
+            expires_in: URL expiration time in seconds (default: 1 hour)
+        """
+        try:
+            if not self.endpoint or not self.bucket_name:
+                return None
+            
+            # Normalize endpoint URL
+            endpoint = self.endpoint.strip()
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f"https://{endpoint}"
+            
+            # Generate presigned URL
+            client = self._get_s3_client()
+            url = client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': self.bucket_name, 'Key': s3_key},
+                ExpiresIn=expires_in
+            )
+            return url
+        except Exception as e:
+            print(f"Error generating URL for {s3_key}: {e}")
+            return None
+    
+    def get_public_url(self, s3_key: str) -> Optional[str]:
+        """
+        Generate a public URL for accessing a file in Wasabi (if bucket is public)
+        Returns the URL if successful, None otherwise
+        
+        Args:
+            s3_key: The S3 key (path) of the file
+        """
+        try:
+            if not self.endpoint or not self.bucket_name:
+                return None
+            
+            # Normalize endpoint URL
+            endpoint = self.endpoint.strip()
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f"https://{endpoint}"
+            
+            # Remove trailing slash from endpoint if present
+            endpoint = endpoint.rstrip('/')
+            
+            # Construct public URL
+            # Format: https://endpoint/bucket/key
+            url = f"{endpoint}/{self.bucket_name}/{s3_key}"
+            return url
+        except Exception as e:
+            print(f"Error generating public URL for {s3_key}: {e}")
+            return None
+    
     def test_connection(self) -> tuple[bool, str]:
         """Test connection to Wasabi B2
         Returns (success: bool, message: str)

@@ -19,6 +19,7 @@ class ProcessedTicket(Base):
     attachments_count = Column(Integer, default=0)
     status = Column(String(50), default='processed')
     error_message = Column(Text, nullable=True)
+    wasabi_files = Column(Text, nullable=True)  # JSON array of S3 keys
 
 class OffloadLog(Base):
     """Log all offload operations"""
@@ -50,6 +51,29 @@ SessionLocal = sessionmaker(bind=engine)
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(engine)
+    # Add missing columns to existing tables if needed
+    _migrate_database()
+
+def _migrate_database():
+    """Add missing columns to existing database tables"""
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    
+    # Check if processed_tickets table exists
+    if 'processed_tickets' in inspector.get_table_names():
+        # Get existing columns
+        existing_columns = [col['name'] for col in inspector.get_columns('processed_tickets')]
+        
+        # Add wasabi_files column if it doesn't exist
+        if 'wasabi_files' not in existing_columns:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE processed_tickets ADD COLUMN wasabi_files TEXT"))
+                    conn.commit()
+                print("Added wasabi_files column to processed_tickets table")
+            except Exception as e:
+                # Column might already exist or other error
+                print(f"Note: Could not add wasabi_files column: {e}")
 
 def get_db():
     """Get database session"""
