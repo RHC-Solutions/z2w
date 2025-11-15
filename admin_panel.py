@@ -10,8 +10,12 @@ from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD
+from config import (
+    ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD,
+    OAUTH_CLIENT_ID, OAUTH_REDIRECT_PATH, OAUTH_SCOPES, OAUTH_AUTHORITY
+)
 import os
+import requests
 from functools import wraps
 
 app = Flask(__name__)
@@ -19,6 +23,26 @@ app.secret_key = SECRET_KEY
 
 # Global scheduler instance
 scheduler = None
+
+# Error handler for API routes to return JSON instead of HTML
+@app.errorhandler(404)
+def not_found_error(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'success': False, 'message': 'API endpoint not found'}), 404
+    return error
+
+@app.errorhandler(500)
+def internal_error(error):
+    if request.path.startswith('/api/'):
+        import traceback
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'API error: {str(error)}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': 'Internal server error. Please check the logs for details.'
+        }), 500
+    return error
 
 # Configure logging to reduce noise from static file requests
 import logging
@@ -56,7 +80,14 @@ def init_scheduler():
 def login_required(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        if not session.get('logged_in'):
+        # Check if user is logged in via OAuth or password
+        if not session.get('logged_in') and not session.get('user_email'):
+            # For API endpoints, return JSON error instead of redirecting
+            if request.path.startswith('/api/'):
+                return jsonify({
+                    'success': False,
+                    'message': 'Authentication required. Please log in.'
+                }), 401
             return redirect(url_for('login', next=request.path))
         return view_func(*args, **kwargs)
     return wrapper
@@ -81,25 +112,200 @@ def favicon():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    """Admin login"""
+    """Admin login - supports both OAuth and password authentication"""
+    # If already logged in, go to dashboard
+    if session.get('logged_in') or session.get('user_email'):
+        return redirect(url_for('index'))
+    
+    # Handle password login (fallback)
     if request.method == 'POST':
-        username = request.form.get('username', '')
-        password = request.form.get('password', '')
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')  # Don't strip password - preserve exact value
+        
+        # Get admin credentials - check database first, then config
+        db = get_db()
+        expected_username = ADMIN_USERNAME
+        expected_password = ADMIN_PASSWORD
+        try:
+            admin_username_setting = db.query(Setting).filter_by(key='ADMIN_USERNAME').first()
+            admin_password_setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+            
+            # Use database value if exists, otherwise use config default
+            if admin_username_setting and admin_username_setting.value:
+                expected_username = admin_username_setting.value.strip()
+            elif ADMIN_USERNAME:
+                expected_username = ADMIN_USERNAME.strip()
+            
+            if admin_password_setting and admin_password_setting.value:
+                expected_password = admin_password_setting.value  # Don't strip password
+            elif ADMIN_PASSWORD:
+                expected_password = ADMIN_PASSWORD  # Don't strip password
+        except Exception as e:
+            import logging
+            logger = logging.getLogger('zendesk_offloader')
+            logger.error(f"Error retrieving credentials from database: {e}", exc_info=True)
+            # Fall back to config defaults
+            expected_username = ADMIN_USERNAME.strip() if ADMIN_USERNAME else "admin"
+            expected_password = ADMIN_PASSWORD if ADMIN_PASSWORD else ""
+        finally:
+            db.close()
+        
+        # Compare credentials
+        username_match = username == expected_username
+        password_match = password == expected_password
+        
+        # Debug logging for troubleshooting
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        if not username_match or not password_match:
+            # Log detailed comparison info
+            logger.warning(f"Login failed:")
+            logger.warning(f"  Username match: {username_match}")
+            logger.warning(f"  Password match: {password_match}")
+            logger.warning(f"  Username provided: '{username}' (len={len(username)}, bytes={username.encode('utf-8')})")
+            logger.warning(f"  Username expected: '{expected_username}' (len={len(expected_username)}, bytes={expected_username.encode('utf-8')})")
+            logger.warning(f"  Password provided: length={len(password)}, bytes={password.encode('utf-8')[:20]}...")
+            logger.warning(f"  Password expected: length={len(expected_password)}, bytes={expected_password.encode('utf-8')[:20]}...")
+            
+            # Check if passwords are similar (first few chars)
+            if len(password) > 0 and len(expected_password) > 0:
+                logger.warning(f"  Password first 5 chars - provided: '{password[:5]}', expected: '{expected_password[:5]}'")
+                logger.warning(f"  Password last 5 chars - provided: '{password[-5:]}', expected: '{expected_password[-5:]}'")
+        
+        if username_match and password_match:
             session['logged_in'] = True
             session['username'] = username
             next_url = request.args.get('next') or url_for('index')
             return redirect(next_url)
         flash('Invalid credentials', 'error')
-        return render_template('login.html')
-    # If already logged in, go to dashboard
-    if session.get('logged_in'):
-        return redirect(url_for('index'))
-    return render_template('login.html')
+        return render_template('login.html', oauth_enabled=bool(OAUTH_CLIENT_ID))
+    
+    return render_template('login.html', oauth_enabled=bool(OAUTH_CLIENT_ID))
+
+@app.route('/login/oauth')
+def login_oauth():
+    """Initiate OAuth login"""
+    if not OAUTH_CLIENT_ID:
+        flash('OAuth is not configured', 'error')
+        return redirect(url_for('login'))
+    
+    try:
+        from oauth_auth import _build_auth_code_flow
+        
+        # Store next URL if provided
+        next_url = request.args.get('next')
+        if next_url:
+            session['next_url'] = next_url
+        
+        # Build redirect URI
+        redirect_uri = request.url_root.rstrip('/') + OAUTH_REDIRECT_PATH
+        
+        flow = _build_auth_code_flow(
+            redirect_uri=redirect_uri
+        )
+        session["flow"] = flow
+        return redirect(flow["auth_uri"])
+    except Exception as e:
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'OAuth login initiation error: {str(e)}', exc_info=True)
+        flash(f'OAuth login failed: {str(e)}', 'error')
+        return redirect(url_for('login'))
+
+@app.route(OAUTH_REDIRECT_PATH)
+def authorized():
+    """OAuth callback handler"""
+    if not OAUTH_CLIENT_ID:
+        flash('OAuth is not configured', 'error')
+        return redirect(url_for('login'))
+    
+    try:
+        from oauth_auth import _build_msal_app, _load_cache, _save_cache, validate_user_domain
+        
+        # Check for errors in the callback
+        if "error" in request.args:
+            error_description = request.args.get("error_description", "Unknown error")
+            flash(f'OAuth error: {error_description}', 'error')
+            return redirect(url_for('login'))
+        
+        cache = _load_cache()
+        result = None
+        
+        # Get the flow from session
+        flow = session.get("flow", {})
+        if not flow:
+            flash('OAuth session expired. Please try again.', 'error')
+            return redirect(url_for('login'))
+        
+        if "code" in request.args:
+            # Build the app with the same authority
+            app = _build_msal_app(cache=cache, authority=OAUTH_AUTHORITY)
+            result = app.acquire_token_by_auth_code_flow(flow, request.args)
+            _save_cache(cache)
+        
+        # Clear flow from session
+        session.pop("flow", None)
+        
+        if result and "error" in result:
+            flash(f'OAuth error: {result.get("error_description", "Unknown error")}', 'error')
+            return redirect(url_for('login'))
+        
+        if result and "access_token" in result:
+            # Get user info from Microsoft Graph
+            graph_response = requests.get(
+                "https://graph.microsoft.com/v1.0/me",
+                headers={'Authorization': 'Bearer ' + result['access_token']},
+                timeout=10
+            )
+            
+            if graph_response.status_code != 200:
+                flash('Failed to retrieve user information from Microsoft', 'error')
+                return redirect(url_for('login'))
+            
+            graph_data = graph_response.json()
+            user_email = graph_data.get('mail') or graph_data.get('userPrincipalName', '')
+            user_name = graph_data.get('displayName', '')
+            
+            if not user_email:
+                flash('Unable to retrieve email from Microsoft account', 'error')
+                return redirect(url_for('login'))
+            
+            # Validate domain
+            try:
+                validate_user_domain(user_email)
+            except ValueError as e:
+                flash(str(e), 'error')
+                session.clear()
+                return redirect(url_for('login'))
+            
+            # Set session
+            session['user_email'] = user_email
+            session['user_name'] = user_name
+            session['logged_in'] = True
+            session['username'] = user_name or user_email
+            
+            next_url = request.args.get('next') or session.pop('next_url', None) or url_for('index')
+            return redirect(next_url)
+        else:
+            flash('Authentication failed. No access token received.', 'error')
+            return redirect(url_for('login'))
+            
+    except Exception as e:
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'OAuth authentication error: {str(e)}', exc_info=True)
+        flash(f'OAuth authentication error: {str(e)}', 'error')
+        session.pop("flow", None)
+        return redirect(url_for('login'))
 
 @app.route('/logout')
 def logout():
-    """End session"""
+    """End session - handles both OAuth and password login"""
+    # Clear OAuth token cache if exists
+    if session.get("token_cache"):
+        session.pop("token_cache")
+    
+    # Clear all session data
     session.clear()
     flash('Logged out', 'success')
     return redirect(url_for('login'))
@@ -483,6 +689,29 @@ def cookies():
     """Cookie Policy page"""
     return render_template('cookies.html')
 
+@app.route('/debug/login-info')
+def debug_login_info():
+    """Debug endpoint to check expected login credentials (temporary - remove in production)"""
+    db = get_db()
+    try:
+        admin_username_setting = db.query(Setting).filter_by(key='ADMIN_USERNAME').first()
+        admin_password_setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+        
+        expected_username = admin_username_setting.value if admin_username_setting else ADMIN_USERNAME
+        expected_password = admin_password_setting.value if admin_password_setting else ADMIN_PASSWORD
+        
+        return jsonify({
+            'username': expected_username,
+            'username_length': len(expected_username) if expected_username else 0,
+            'password_length': len(expected_password) if expected_password else 0,
+            'password_first_5': expected_password[:5] if expected_password else '',
+            'password_last_5': expected_password[-5:] if expected_password else '',
+            'source_username': 'database' if admin_username_setting else 'config',
+            'source_password': 'database' if admin_password_setting else 'config',
+        })
+    finally:
+        db.close()
+
 @app.route('/api/test_connection', methods=['POST'])
 @login_required
 def test_connection():
@@ -611,6 +840,186 @@ def scheduler_status():
         'running': sched.scheduler.running,
         'next_run': next_run.isoformat() if next_run else None
     })
+
+@app.route('/api/reset_admin_password', methods=['POST'])
+@login_required
+def reset_admin_password():
+    """Reset admin password and send to Telegram (requires login)"""
+    return _reset_admin_password_internal()
+
+@app.route('/api/reset_admin_password_public', methods=['POST'])
+def reset_admin_password_public():
+    """Reset admin password from login page (public, no login required)"""
+    # Check if Telegram is configured - this is required for security
+    # Check database first, then environment
+    db = get_db()
+    telegram_configured = False
+    try:
+        telegram_token_setting = db.query(Setting).filter_by(key='TELEGRAM_BOT_TOKEN').first()
+        telegram_chat_setting = db.query(Setting).filter_by(key='TELEGRAM_CHAT_ID').first()
+        if telegram_token_setting and telegram_chat_setting and telegram_token_setting.value and telegram_chat_setting.value:
+            telegram_configured = True
+    finally:
+        db.close()
+    
+    # If not in database, check environment
+    if not telegram_configured:
+        from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            return jsonify({
+                'success': False,
+                'message': 'Password reset is not available. Telegram is not configured. Please configure Telegram bot token and chat ID in settings.'
+            }), 400
+    
+    return _reset_admin_password_internal()
+
+def _reset_admin_password_internal():
+    """Reset admin password and send to Telegram"""
+    try:
+        from password_generator import generate_secure_password
+        from telegram_reporter import TelegramReporter
+        from config import BASE_DIR, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ADMIN_USERNAME
+        import logging
+        
+        logger = logging.getLogger('zendesk_offloader')
+        
+        # Generate new password
+        new_password = generate_secure_password(64)
+        
+        # Update password in .env file
+        env_file = BASE_DIR / '.env'
+        env_updated = False
+        
+        if env_file.exists():
+            # Read existing .env file
+            with open(env_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Update ADMIN_PASSWORD line
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith('ADMIN_PASSWORD='):
+                    new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
+                    env_updated = True
+                else:
+                    new_lines.append(line)
+            
+            # If ADMIN_PASSWORD not found, add it
+            if not env_updated:
+                new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
+            
+            # Write back to file
+            with open(env_file, 'w') as f:
+                f.writelines(new_lines)
+        else:
+            # Create .env file if it doesn't exist
+            with open(env_file, 'w') as f:
+                f.write(f'ADMIN_PASSWORD={new_password}\n')
+        
+        # Update password in database
+        db = get_db()
+        try:
+            setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+            if setting:
+                setting.value = new_password
+                setting.updated_at = datetime.utcnow()
+            else:
+                setting = Setting(key='ADMIN_PASSWORD', value=new_password)
+                db.add(setting)
+            db.commit()
+        finally:
+            db.close()
+        
+        # Reload config to ensure new password is loaded
+        from config import reload_config
+        reload_config()
+        
+        # Verify the new password was saved correctly by reading from .env
+        # This ensures we're sending the actual new password, not any cached value
+        saved_password = new_password
+        if env_file.exists():
+            with open(env_file, 'r') as f:
+                for line in f:
+                    if line.strip().startswith('ADMIN_PASSWORD='):
+                        saved_password = line.split('=', 1)[1].strip()
+                        break
+        
+        # Use the saved password (should be the same as new_password, but verify)
+        password_to_send = saved_password if saved_password else new_password
+        
+        # Log the password reset for audit
+        reset_by = session.get('user_name') or session.get('user_email') or session.get('username', 'Unknown')
+        if not session.get('logged_in') and not session.get('user_email'):
+            reset_by = 'Public (from login page)'
+        logger.info(f"Admin password reset by {reset_by}")
+        
+        # Send password to Telegram
+        # Check database for Telegram settings first (database takes priority)
+        db_telegram = get_db()
+        telegram_bot_token = None
+        telegram_chat_id = None
+        try:
+            telegram_token_setting = db_telegram.query(Setting).filter_by(key='TELEGRAM_BOT_TOKEN').first()
+            telegram_chat_setting = db_telegram.query(Setting).filter_by(key='TELEGRAM_CHAT_ID').first()
+            if telegram_token_setting:
+                telegram_bot_token = telegram_token_setting.value
+            if telegram_chat_setting:
+                telegram_chat_id = telegram_chat_setting.value
+        finally:
+            db_telegram.close()
+        
+        # If not in database, reload config and get from environment
+        if not telegram_bot_token or not telegram_chat_id:
+            reload_config()
+            from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+            telegram_bot_token = telegram_bot_token or TELEGRAM_BOT_TOKEN
+            telegram_chat_id = telegram_chat_id or TELEGRAM_CHAT_ID
+        
+        telegram_sent = False
+        if telegram_bot_token and telegram_chat_id:
+            try:
+                telegram_reporter = TelegramReporter(bot_token=telegram_bot_token, chat_id=telegram_chat_id)
+                reset_source = reset_by if reset_by != 'Public (from login page)' else 'Login Page (Public)'
+                message = f"""🔐 <b>Admin Password Reset</b>
+
+<b>Username:</b> {ADMIN_USERNAME}
+<b>New Password:</b> <code>{password_to_send}</code>
+
+⚠️ <b>Important:</b> Save this password securely. It will not be shown again.
+
+<i>Reset by: {reset_source}</i>
+<i>Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</i>"""
+                
+                telegram_sent = telegram_reporter.send_message(message)
+                
+                if not telegram_sent:
+                    logger.warning("Failed to send password to Telegram - check bot token and chat ID configuration")
+            except Exception as e:
+                logger.error(f"Error sending password to Telegram: {str(e)}", exc_info=True)
+                telegram_sent = False
+        else:
+            logger.warning(f"Telegram not configured - bot_token: {bool(telegram_bot_token)}, chat_id: {bool(telegram_chat_id)}")
+        
+        if telegram_sent:
+            return jsonify({
+                'success': True,
+                'message': 'Password reset successfully! New password has been sent to Telegram: https://t.me/rhcsolutions'
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': f'Password reset successfully! However, Telegram notification failed. New password: {password_to_send}',
+                'warning': True
+            })
+            
+    except Exception as e:
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'Error resetting admin password: {str(e)}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'Error resetting password: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     # Initialize database

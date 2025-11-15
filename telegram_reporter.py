@@ -41,6 +41,42 @@ class TelegramReporter:
             print(f"Error sending Telegram report: {e}")
             return False
     
+    def send_message(self, message: str) -> bool:
+        """
+        Send a custom message to Telegram
+        """
+        if not self.bot_token or not self.chat_id:
+            print("Telegram bot token or chat ID not configured")
+            return False
+        
+        if not self.api_url:
+            print("Telegram API URL not initialized - bot token may be invalid")
+            return False
+        
+        try:
+            payload = {
+                "chat_id": self.chat_id,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            
+            response = requests.post(self.api_url, json=payload, timeout=10)
+            response.raise_for_status()
+            
+            return True
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"HTTP error sending Telegram message: {e}"
+            if hasattr(e.response, 'text'):
+                error_msg += f" - Response: {e.response.text}"
+            print(error_msg)
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"Request error sending Telegram message: {e}")
+            return False
+        except Exception as e:
+            print(f"Unexpected error sending Telegram message: {e}")
+            return False
+    
     def _format_report(self, summary: Dict) -> str:
         """Format report as Telegram message"""
         run_date = summary['run_date']

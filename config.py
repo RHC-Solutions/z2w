@@ -55,6 +55,22 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "4Ur@k?WU7eq&Frm8AK+%bxcruq82N4^T")
 SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "")
 SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "")
 
+# Office 365 OAuth Configuration
+OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "")
+OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "")
+OAUTH_AUTHORITY = os.getenv("OAUTH_AUTHORITY", "https://login.microsoftonline.com/common")
+OAUTH_REDIRECT_PATH = os.getenv("OAUTH_REDIRECT_PATH", "/getAToken")
+OAUTH_SCOPES = ["User.Read"]
+
+# Allowed email domains for OAuth
+ALLOWED_DOMAINS = [
+    "heimman.com",
+    "rhcsolutions.com",
+    "synergybeam.com",
+    "iccswitch.com",
+    "go4rex.com"
+]
+
 def reload_config():
     """Reload environment variables from .env file"""
     load_dotenv(override=True)
@@ -64,6 +80,7 @@ def reload_config():
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL
     global ADMIN_USERNAME, ADMIN_PASSWORD
     global SSL_CERT_PATH, SSL_KEY_PATH
+    global OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_AUTHORITY, OAUTH_REDIRECT_PATH
     
     ZENDESK_SUBDOMAIN = os.getenv("ZENDESK_SUBDOMAIN", "")
     ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL", "")
@@ -89,5 +106,10 @@ def reload_config():
     
     SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "")
     SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "")
+    
+    OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "")
+    OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "")
+    OAUTH_AUTHORITY = os.getenv("OAUTH_AUTHORITY", "https://login.microsoftonline.com/common")
+    OAUTH_REDIRECT_PATH = os.getenv("OAUTH_REDIRECT_PATH", "/getAToken")
 
 

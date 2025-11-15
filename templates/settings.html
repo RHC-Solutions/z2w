@@ -95,6 +95,30 @@
         </div>
     </div>
     
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <h3>Admin Password</h3>
+            <div class="card border-warning">
+                <div class="card-body">
+                    <h5 class="card-title">Reset Admin Password</h5>
+                    <p class="card-text">
+                        Generate a new secure 64-character password. The new password will be automatically sent to 
+                        <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer">Telegram</a>.
+                    </p>
+                    <p class="card-text">
+                        <small class="text-muted">
+                            <strong>Password Requirements:</strong> 64 characters, includes lowercase, uppercase, numbers, and symbols. 
+                            Excludes ambiguous characters and brackets.
+                        </small>
+                    </p>
+                    <button type="button" class="btn btn-warning" onclick="resetAdminPassword()">
+                        <i class="bi bi-key"></i> Reset Admin Password
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <div class="mt-4">
         <button type="submit" class="btn btn-primary">Save Settings</button>
     </div>
@@ -110,6 +134,48 @@ function testConnection(type) {
     .then(r => r.json())
     .then(data => {
         alert(data.message);
+    });
+}
+
+function resetAdminPassword() {
+    if (!confirm('Are you sure you want to reset the admin password? The new password will be sent to Telegram.')) {
+        return;
+    }
+    
+    if (!confirm('This action cannot be undone. Make sure you have access to Telegram to receive the new password. Continue?')) {
+        return;
+    }
+    
+    fetch('/api/reset_admin_password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(r => {
+        // Check if response is JSON
+        const contentType = r.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            return r.json();
+        } else {
+            // If not JSON, it's probably an HTML error page
+            return r.text().then(text => {
+                throw new Error('Server returned an error. Please check the console for details.');
+            });
+        }
+    })
+    .then(data => {
+        if (data.success) {
+            if (data.warning) {
+                alert('⚠️ ' + data.message);
+            } else {
+                alert('✅ ' + data.message);
+            }
+        } else {
+            alert('❌ ' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Password reset error:', error);
+        alert('❌ Error: ' + error.message);
     });
 }
 </script>

@@ -46,16 +46,29 @@
                                 {% endfor %}
                             {% endif %}
                         {% endwith %}
+                        
+                        {% if oauth_enabled %}
+                        <div class="mb-4">
+                            <a href="{{ url_for('login_oauth') }}" class="btn btn-primary w-100 mb-3" style="background-color: #0078d4; border-color: #0078d4;">
+                                <i class="bi bi-microsoft"></i> Sign in with Microsoft
+                            </a>
+                            <div class="text-center">
+                                <small class="text-muted">or</small>
+                            </div>
+                            <hr class="my-3">
+                        </div>
+                        {% endif %}
+                        
                         <form method="POST">
                             <div class="mb-3">
                                 <label class="form-label">Username</label>
-                                <input type="text" name="username" class="form-control" autofocus required>
+                                <input type="text" name="username" class="form-control" {% if not oauth_enabled %}autofocus{% endif %} required>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Password</label>
                                 <input type="password" name="password" class="form-control" required>
                             </div>
-                            <button type="submit" class="btn btn-primary w-100">Login</button>
+                            <button type="submit" class="btn btn-secondary w-100">Login with Password</button>
                         </form>
                         </div>
                     </div>
