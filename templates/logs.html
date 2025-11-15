@@ -10,6 +10,7 @@
                 <th>Run Date</th>
                 <th>Tickets Processed</th>
                 <th>Attachments Uploaded</th>
+                <th>Wasabi Files</th>
                 <th>Errors</th>
                 <th>Status</th>
                 <th>Report Sent</th>
@@ -21,6 +22,19 @@
                 <td>{{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                 <td>{{ log.tickets_processed }}</td>
                 <td>{{ log.attachments_uploaded }}</td>
+                <td>
+                    {% if log.wasabi_urls %}
+                        <div style="max-width: 300px;">
+                            {% for file_info in log.wasabi_urls %}
+                                <a href="{{ file_info.url }}" target="_blank" class="btn btn-sm btn-outline-primary mb-1" style="display: inline-block; margin-right: 5px;" title="Ticket #{{ file_info.ticket_id }}: {{ file_info.filename }}">
+                                    <i class="bi bi-download"></i> {{ file_info.filename[:20] }}{% if file_info.filename|length > 20 %}...{% endif %}
+                                </a>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
                 <td>{{ log.errors_count }}</td>
                 <td>
                     <span class="badge bg-{{ 'success' if log.status == 'completed' else 'warning' }}">

@@ -3,6 +3,7 @@ Main offload logic for processing tickets and uploading attachments
 """
 from datetime import datetime
 from typing import Dict, List
+import json
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
 from database import get_db, ProcessedTicket, OffloadLog
@@ -86,11 +87,16 @@ class AttachmentOffloader:
                     summary["attachments_uploaded"] += result["attachments_uploaded"]
                     summary["details"].append(result)
                     
+                    # Extract S3 keys from uploaded files
+                    s3_keys = [file_info["s3_key"] for file_info in result.get("uploaded_files", [])]
+                    wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
+                    
                     # Mark ticket as processed in database
                     processed_ticket = ProcessedTicket(
                         ticket_id=ticket_id,
                         attachments_count=result["attachments_uploaded"],
-                        status="processed"
+                        status="processed",
+                        wasabi_files=wasabi_files_json
                     )
                     db.add(processed_ticket)
                     db.commit()
@@ -130,19 +136,23 @@ class AttachmentOffloader:
     def process_ticket(self, ticket_id: int) -> Dict:
         """
         Process a single ticket and upload its attachments
+        After uploading to Wasabi, replaces attachment in Zendesk with Wasabi link and deletes the attachment
         """
         result = {
             "ticket_id": ticket_id,
             "attachments_uploaded": 0,
+            "attachments_deleted": 0,
             "uploaded_files": [],
             "errors": []
         }
         
-        # Get attachments for this ticket
+        # Get attachments for this ticket (now includes comment_id)
         attachments = self.zendesk.get_ticket_attachments(ticket_id)
         
         for attachment in attachments:
             attachment_url = attachment.get("content_url")
+            attachment_id = attachment.get("id")
+            comment_id = attachment.get("comment_id")
             filename = attachment.get("file_name", "unknown")
             content_type = attachment.get("content_type", "application/octet-stream")
             
@@ -168,6 +178,30 @@ class AttachmentOffloader:
                             "original": filename,
                             "s3_key": s3_key
                         })
+                        
+                        # Get Wasabi URL using the same method as in tickets view
+                        # This generates presigned URL with query parameters (AWSAccessKeyId, Signature, Expires)
+                        wasabi_url = self.wasabi.get_file_url(s3_key, expires_in=31536000)  # 1 year expiration
+                        
+                        if wasabi_url and attachment_id and comment_id:
+                            # Replace attachment in comment with Wasabi link and delete it
+                            success = self.zendesk.replace_attachment_in_comment(
+                                ticket_id=ticket_id,
+                                comment_id=comment_id,
+                                attachment_id=attachment_id,
+                                wasabi_url=wasabi_url,
+                                filename=filename
+                            )
+                            
+                            if success:
+                                result["attachments_deleted"] += 1
+                                print(f"Replaced attachment {filename} with Wasabi link and deleted from Zendesk")
+                            else:
+                                result["errors"].append(f"Failed to replace/delete attachment {filename} in Zendesk")
+                        elif not wasabi_url:
+                            result["errors"].append(f"Failed to generate Wasabi URL for {filename}")
+                        else:
+                            result["errors"].append(f"Missing attachment_id or comment_id for {filename}")
                     else:
                         result["errors"].append(f"Failed to upload {filename}")
                 else:
@@ -187,9 +221,41 @@ class AttachmentOffloader:
         # Process tickets
         summary = self.process_tickets()
         
+        # Collect all S3 keys from all processed tickets
+        all_s3_keys = []
+        for ticket_detail in summary.get("details", []):
+            if isinstance(ticket_detail, dict):
+                for file_info in ticket_detail.get("uploaded_files", []):
+                    if isinstance(file_info, dict) and "s3_key" in file_info:
+                        all_s3_keys.append({
+                            "ticket_id": ticket_detail.get("ticket_id"),
+                            "s3_key": file_info["s3_key"],
+                            "original_filename": file_info.get("original", "")
+                        })
+        
+        # Add S3 keys to summary for easy access
+        summary["all_s3_keys"] = all_s3_keys
+        
         # Create log entry
         db = get_db()
         try:
+            # Store summary as JSON for structured access
+            # Convert datetime and other non-serializable objects
+            def json_serializer(obj):
+                """JSON serializer for objects not serializable by default json code"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Type {type(obj)} not serializable")
+            
+            summary_for_storage = {
+                "run_date": summary["run_date"].isoformat() if isinstance(summary["run_date"], datetime) else str(summary["run_date"]),
+                "tickets_processed": summary["tickets_processed"],
+                "attachments_uploaded": summary["attachments_uploaded"],
+                "errors": summary["errors"],
+                "all_s3_keys": all_s3_keys,
+                "details": summary.get("details", [])
+            }
+            
             log_entry = OffloadLog(
                 run_date=summary["run_date"],
                 tickets_processed=summary["tickets_processed"],
@@ -197,7 +263,7 @@ class AttachmentOffloader:
                 errors_count=len(summary["errors"]),
                 status="completed" if len(summary["errors"]) == 0 else "completed_with_errors",
                 report_sent=False,
-                details=str(summary)
+                details=json.dumps(summary_for_storage)
             )
             
             db.add(log_entry)

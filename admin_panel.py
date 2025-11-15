@@ -1,7 +1,7 @@
 """
 Admin panel for managing settings and monitoring
 """
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from datetime import datetime
 from sqlalchemy import func
 from database import get_db, Setting, ProcessedTicket, OffloadLog
@@ -10,14 +10,41 @@ from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY
+from config import ADMIN_PANEL_PORT, ADMIN_PANEL_HOST, SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD
 import os
+from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
 # Global scheduler instance
 scheduler = None
+
+# Configure logging to reduce noise from static file requests
+import logging
+from logging import Filter
+
+class StaticFileFilter(Filter):
+    """Filter out 304 responses for static files"""
+    def filter(self, record):
+        # Suppress 304 (Not Modified) responses for favicon and other static files
+        msg = str(record.getMessage())
+        msg_lower = msg.lower()
+        
+        # Suppress favicon requests (both 304 and 200)
+        if 'favicon' in msg_lower:
+            return False
+        
+        # Suppress 304 responses for static files
+        if '304' in msg and ('/static/' in msg or 'static' in msg_lower):
+            return False
+            
+        return True
+
+# Apply filter to werkzeug logger and set level to WARNING to reduce noise
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.WARNING)
+werkzeug_logger.addFilter(StaticFileFilter())
 
 def init_scheduler():
     """Initialize scheduler"""
@@ -26,7 +53,59 @@ def init_scheduler():
         scheduler = OffloadScheduler()
     return scheduler
 
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login', next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapper
+
+@app.route('/favicon.ico')
+def favicon():
+    """Serve favicon with proper headers and cache control"""
+    from flask import send_from_directory, make_response
+    import os
+    
+    response = make_response(send_from_directory(
+        os.path.join(app.root_path, 'static'),
+        'favicon.ico',
+        mimetype='image/vnd.microsoft.icon'
+    ))
+    
+    # Set cache headers to reduce requests
+    response.cache_control.max_age = 86400  # 1 day
+    response.cache_control.public = True
+    
+    return response
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Admin login"""
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['logged_in'] = True
+            session['username'] = username
+            next_url = request.args.get('next') or url_for('index')
+            return redirect(next_url)
+        flash('Invalid credentials', 'error')
+        return render_template('login.html')
+    # If already logged in, go to dashboard
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """End session"""
+    session.clear()
+    flash('Logged out', 'success')
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def index():
     """Dashboard"""
     db = get_db()
@@ -60,6 +139,7 @@ def index():
         db.close()
 
 @app.route('/settings', methods=['GET', 'POST'])
+@login_required
 def settings():
     """Settings page"""
     db = get_db()
@@ -169,10 +249,53 @@ def settings():
         db.close()
 
 @app.route('/tickets')
+@login_required
 def tickets():
     """List processed tickets"""
+    import json
+    # Ensure database schema is up to date
+    try:
+        from database import _migrate_database
+        _migrate_database()
+    except Exception:
+        pass  # Migration already done or failed, continue anyway
+    
     db = get_db()
     try:
+        # Get settings from database for Wasabi client
+        settings_dict = {}
+        settings_list = db.query(Setting).all()
+        for s in settings_list:
+            settings_dict[s.key] = s.value
+        
+        # Get Wasabi configuration
+        from config import reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+        reload_config()
+        
+        endpoint = settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT
+        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+        
+        # Initialize Wasabi client for URL generation
+        wasabi_client = None
+        if endpoint and access_key and secret_key and bucket_name:
+            try:
+                endpoint = endpoint.strip() if endpoint else ""
+                if endpoint and not endpoint.startswith('http'):
+                    endpoint = f"https://{endpoint}"
+                wasabi_client = WasabiClient(
+                    endpoint=endpoint,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    bucket_name=bucket_name
+                )
+            except Exception as e:
+                # If Wasabi client fails, we'll just not show URLs
+                # Log the error but don't fail the page
+                print(f"Warning: Could not initialize Wasabi client: {e}")
+                pass
+        
         page = request.args.get('page', 1, type=int)
         per_page = 50
         
@@ -181,6 +304,32 @@ def tickets():
         tickets_query = db.query(ProcessedTicket).order_by(
             ProcessedTicket.processed_at.desc()
         ).offset((page - 1) * per_page).limit(per_page).all()
+        
+        # Generate URLs for each ticket's files
+        for ticket in tickets_query:
+            ticket.wasabi_urls = []
+            # Safely get wasabi_files attribute (may not exist in older database schemas)
+            wasabi_files = getattr(ticket, 'wasabi_files', None)
+            if wasabi_files and wasabi_client:
+                try:
+                    s3_keys = json.loads(wasabi_files)
+                    for s3_key in s3_keys:
+                        # Try presigned URL first, fallback to public URL
+                        try:
+                            url = wasabi_client.get_file_url(s3_key)
+                            if not url:
+                                url = wasabi_client.get_public_url(s3_key)
+                            if url:
+                                ticket.wasabi_urls.append({
+                                    'url': url,
+                                    'filename': s3_key.split('/')[-1] if '/' in s3_key else s3_key
+                                })
+                        except Exception:
+                            # Skip this file if URL generation fails
+                            pass
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    # Invalid JSON or missing attribute
+                    pass
         
         # Create pagination object
         class Pagination:
@@ -210,10 +359,44 @@ def tickets():
         db.close()
 
 @app.route('/logs')
+@login_required
 def logs():
     """View offload logs"""
+    import json
     db = get_db()
     try:
+        # Get settings from database for Wasabi client
+        settings_dict = {}
+        settings_list = db.query(Setting).all()
+        for s in settings_list:
+            settings_dict[s.key] = s.value
+        
+        # Get Wasabi configuration
+        from config import reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+        reload_config()
+        
+        endpoint = settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT
+        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+        
+        # Initialize Wasabi client for URL generation
+        wasabi_client = None
+        if endpoint and access_key and secret_key and bucket_name:
+            try:
+                endpoint = endpoint.strip() if endpoint else ""
+                if endpoint and not endpoint.startswith('http'):
+                    endpoint = f"https://{endpoint}"
+                wasabi_client = WasabiClient(
+                    endpoint=endpoint,
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    bucket_name=bucket_name
+                )
+            except Exception as e:
+                print(f"Warning: Could not initialize Wasabi client: {e}")
+                pass
+        
         page = request.args.get('page', 1, type=int)
         per_page = 20
         
@@ -222,6 +405,43 @@ def logs():
         logs_query = db.query(OffloadLog).order_by(
             OffloadLog.run_date.desc()
         ).offset((page - 1) * per_page).limit(per_page).all()
+        
+        # Generate URLs for each log's files
+        for log in logs_query:
+            log.wasabi_urls = []
+            if log.details and wasabi_client:
+                try:
+                    # Try to parse as JSON (new format)
+                    log_data = json.loads(log.details)
+                    if isinstance(log_data, dict) and "all_s3_keys" in log_data:
+                        for file_info in log_data["all_s3_keys"]:
+                            s3_key = file_info.get("s3_key")
+                            if s3_key:
+                                try:
+                                    url = wasabi_client.get_file_url(s3_key)
+                                    if not url:
+                                        url = wasabi_client.get_public_url(s3_key)
+                                    if url:
+                                        log.wasabi_urls.append({
+                                            'url': url,
+                                            'filename': file_info.get("original_filename", s3_key.split('/')[-1] if '/' in s3_key else s3_key),
+                                            'ticket_id': file_info.get("ticket_id")
+                                        })
+                                except Exception:
+                                    pass
+                    # Fallback: try to extract from old string format
+                    elif isinstance(log_data, str):
+                        # Old format - try to extract S3 keys from string representation
+                        # This is a fallback for older logs
+                        pass
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    # Invalid JSON or old format - try to parse as string
+                    try:
+                        # For old logs stored as string, we can't easily extract S3 keys
+                        # They would need to be reprocessed
+                        pass
+                    except Exception:
+                        pass
         
         # Create pagination object
         class Pagination:
@@ -251,6 +471,7 @@ def logs():
         db.close()
 
 @app.route('/api/test_connection', methods=['POST'])
+@login_required
 def test_connection():
     """Test Zendesk and Wasabi connections"""
     connection_type = request.json.get('type')
@@ -331,6 +552,7 @@ def test_connection():
     return jsonify({'success': False, 'message': 'Invalid connection type'})
 
 @app.route('/api/run_now', methods=['POST'])
+@login_required
 def run_now():
     """Manually trigger offload"""
     try:
@@ -341,6 +563,7 @@ def run_now():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/start', methods=['POST'])
+@login_required
 def start_scheduler():
     """Start scheduler"""
     try:
@@ -352,6 +575,7 @@ def start_scheduler():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/stop', methods=['POST'])
+@login_required
 def stop_scheduler():
     """Stop scheduler"""
     try:
@@ -363,6 +587,7 @@ def stop_scheduler():
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/scheduler/status', methods=['GET'])
+@login_required
 def scheduler_status():
     """Get scheduler status"""
     sched = init_scheduler()
@@ -382,6 +607,12 @@ if __name__ == '__main__':
     # Start scheduler
     sched = init_scheduler()
     sched.start()
+    
+    # Configure Flask logging - suppress favicon and static file noise
+    # Keep error logging but suppress INFO level access logs
+    import logging
+    werkzeug_log = logging.getLogger('werkzeug')
+    werkzeug_log.setLevel(logging.ERROR)  # Only show errors, not access logs
     
     # Run Flask app
     app.run(host=ADMIN_PANEL_HOST, port=ADMIN_PANEL_PORT, debug=False)

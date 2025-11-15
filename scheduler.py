@@ -8,6 +8,10 @@ from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from database import get_db, OffloadLog
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
+import logging
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class OffloadScheduler:
     """Manage scheduled offload jobs"""
@@ -19,6 +23,7 @@ class OffloadScheduler:
     
     def scheduled_job(self):
         """Job to run daily at 00:00 GMT"""
+        logger.info(f"Scheduled job started at {datetime.utcnow()}")
         print(f"Scheduled job started at {datetime.utcnow()}")
         
         # Run offload
@@ -38,7 +43,14 @@ class OffloadScheduler:
         finally:
             db.close()
         
+        logger.info(f"Scheduled job completed at {datetime.utcnow()}")
         print(f"Scheduled job completed at {datetime.utcnow()}")
+    
+    def archive_logs_job(self):
+        """Job to archive old logs daily"""
+        from logger_config import archive_old_logs
+        logger.info("Running daily log archiving job...")
+        archive_old_logs(days_to_keep=7)
     
     def start(self):
         """Start the scheduler"""
@@ -51,8 +63,19 @@ class OffloadScheduler:
             replace_existing=True
         )
         
+        # Schedule log archiving job daily at 01:00 GMT (after offload job)
+        self.scheduler.add_job(
+            self.archive_logs_job,
+            trigger=CronTrigger(hour=1, minute=0, timezone=SCHEDULER_TIMEZONE),
+            id='archive_logs',
+            name='Daily Log Archiving',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
-        print(f"Scheduler started. Next run: {self.scheduler.get_jobs()[0].next_run_time}")
+        next_run = self.scheduler.get_jobs()[0].next_run_time if self.scheduler.get_jobs() else None
+        logger.info(f"Scheduler started. Next run: {next_run}")
+        print(f"Scheduler started. Next run: {next_run}")
     
     def stop(self):
         """Stop the scheduler"""

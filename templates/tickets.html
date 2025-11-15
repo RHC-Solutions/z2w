@@ -11,6 +11,7 @@
                 <th>Processed At</th>
                 <th>Attachments Count</th>
                 <th>Status</th>
+                <th>Wasabi Files</th>
                 <th>Error</th>
             </tr>
         </thead>
@@ -24,6 +25,17 @@
                     <span class="badge bg-{{ 'success' if ticket.status == 'processed' else 'danger' }}">
                         {{ ticket.status }}
                     </span>
+                </td>
+                <td>
+                    {% if ticket.wasabi_urls %}
+                        {% for file_info in ticket.wasabi_urls %}
+                            <a href="{{ file_info.url }}" target="_blank" class="btn btn-sm btn-outline-primary mb-1" style="display: inline-block; margin-right: 5px;">
+                                {{ file_info.filename }}
+                            </a>
+                        {% endfor %}
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
                 </td>
                 <td>{{ ticket.error_message or '-' }}</td>
             </tr>

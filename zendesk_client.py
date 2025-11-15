@@ -84,7 +84,8 @@ class ZendeskClient:
     
     def get_ticket_attachments(self, ticket_id: int) -> List[Dict]:
         """
-        Get all attachments for a specific ticket
+        Get all attachments for a specific ticket with their comment information
+        Returns list of attachment dicts with added 'comment_id' field
         """
         if not self.base_url:
             return []
@@ -97,13 +98,113 @@ class ZendeskClient:
             response.raise_for_status()
             data = response.json()
             
-            # Extract attachments from all comments
+            # Extract attachments from all comments with comment_id
             for comment in data.get("comments", []):
-                attachments.extend(comment.get("attachments", []))
+                comment_id = comment.get("id")
+                for attachment in comment.get("attachments", []):
+                    # Add comment_id to attachment for later reference
+                    attachment_with_comment = attachment.copy()
+                    attachment_with_comment["comment_id"] = comment_id
+                    attachments.append(attachment_with_comment)
         except requests.exceptions.RequestException as e:
             print(f"Error fetching attachments for ticket {ticket_id}: {e}")
         
         return attachments
+    
+    def get_ticket_comments(self, ticket_id: int) -> List[Dict]:
+        """
+        Get all comments for a specific ticket
+        Returns list of comment dictionaries
+        """
+        if not self.base_url:
+            return []
+        
+        url = f"{self.base_url}/tickets/{ticket_id}/comments.json"
+        
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("comments", [])
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching comments for ticket {ticket_id}: {e}")
+            return []
+    
+    def replace_attachment_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str) -> bool:
+        """
+        Replace an attachment in a comment with a Wasabi link
+        Since Zendesk API doesn't allow updating existing comments directly,
+        we'll add a new comment with the Wasabi link and then delete the attachment
+        """
+        if not self.base_url:
+            return False
+        
+        url = f"{self.base_url}/tickets/{ticket_id}.json"
+        
+        try:
+            # Get the original comment to check if it's public or private
+            comments = self.get_ticket_comments(ticket_id)
+            original_comment = None
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    original_comment = comment
+                    break
+            
+            is_public = True
+            if original_comment:
+                is_public = original_comment.get("public", True)
+            
+            # Create a new comment with the Wasabi link
+            # Format: [Attachment Secured: filename (link)]
+            wasabi_link_text = f"[Attachment Secured: {filename}]({wasabi_url})"
+            
+            # Add a new comment with the Wasabi link
+            update_data = {
+                "ticket": {
+                    "comment": {
+                        "body": wasabi_link_text,
+                        "public": is_public
+                    }
+                }
+            }
+            
+            response = self.session.put(url, json=update_data)
+            response.raise_for_status()
+            
+            # Now redact (delete) the attachment from the original comment
+            return self.delete_attachment(ticket_id, comment_id, attachment_id)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error replacing attachment {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}")
+            return False
+    
+    def delete_attachment(self, ticket_id: int, comment_id: int, attachment_id: int) -> bool:
+        """
+        Delete (redact) an attachment from a Zendesk comment
+        Uses Zendesk's Redact API which replaces the attachment with a redacted.txt file
+        """
+        if not self.base_url:
+            return False
+        
+        # Zendesk Redact API endpoint
+        url = f"{self.base_url}/tickets/{ticket_id}/comments/{comment_id}/attachments/{attachment_id}/redact.json"
+        
+        try:
+            # Redact API requires PUT request with empty body
+            response = self.session.put(url, json={})
+            response.raise_for_status()
+            return True
+        except requests.exceptions.HTTPError as e:
+            # Check if it's a 404 (attachment might already be deleted) or other error
+            if e.response.status_code == 404:
+                print(f"Attachment {attachment_id} not found (may already be deleted)")
+                return True  # Consider it successful if already gone
+            error_msg = f"HTTP Error redacting attachment {attachment_id}: {e.response.status_code} - {e.response.text}"
+            print(f"ERROR: {error_msg}")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"Error redacting attachment {attachment_id}: {e}")
+            return False
     
     def download_attachment(self, attachment_url: str) -> Optional[bytes]:
         """
