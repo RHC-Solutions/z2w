@@ -20,6 +20,32 @@ app.secret_key = SECRET_KEY
 # Global scheduler instance
 scheduler = None
 
+# Configure logging to reduce noise from static file requests
+import logging
+from logging import Filter
+
+class StaticFileFilter(Filter):
+    """Filter out 304 responses for static files"""
+    def filter(self, record):
+        # Suppress 304 (Not Modified) responses for favicon and other static files
+        msg = str(record.getMessage())
+        msg_lower = msg.lower()
+        
+        # Suppress favicon requests (both 304 and 200)
+        if 'favicon' in msg_lower:
+            return False
+        
+        # Suppress 304 responses for static files
+        if '304' in msg and ('/static/' in msg or 'static' in msg_lower):
+            return False
+            
+        return True
+
+# Apply filter to werkzeug logger and set level to WARNING to reduce noise
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.WARNING)
+werkzeug_logger.addFilter(StaticFileFilter())
+
 def init_scheduler():
     """Initialize scheduler"""
     global scheduler
@@ -34,6 +60,24 @@ def login_required(view_func):
             return redirect(url_for('login', next=request.path))
         return view_func(*args, **kwargs)
     return wrapper
+
+@app.route('/favicon.ico')
+def favicon():
+    """Serve favicon with proper headers and cache control"""
+    from flask import send_from_directory, make_response
+    import os
+    
+    response = make_response(send_from_directory(
+        os.path.join(app.root_path, 'static'),
+        'favicon.ico',
+        mimetype='image/vnd.microsoft.icon'
+    ))
+    
+    # Set cache headers to reduce requests
+    response.cache_control.max_age = 86400  # 1 day
+    response.cache_control.public = True
+    
+    return response
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -563,6 +607,12 @@ if __name__ == '__main__':
     # Start scheduler
     sched = init_scheduler()
     sched.start()
+    
+    # Configure Flask logging - suppress favicon and static file noise
+    # Keep error logging but suppress INFO level access logs
+    import logging
+    werkzeug_log = logging.getLogger('werkzeug')
+    werkzeug_log.setLevel(logging.ERROR)  # Only show errors, not access logs
     
     # Run Flask app
     app.run(host=ADMIN_PANEL_HOST, port=ADMIN_PANEL_PORT, debug=False)

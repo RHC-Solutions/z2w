@@ -136,19 +136,23 @@ class AttachmentOffloader:
     def process_ticket(self, ticket_id: int) -> Dict:
         """
         Process a single ticket and upload its attachments
+        After uploading to Wasabi, replaces attachment in Zendesk with Wasabi link and deletes the attachment
         """
         result = {
             "ticket_id": ticket_id,
             "attachments_uploaded": 0,
+            "attachments_deleted": 0,
             "uploaded_files": [],
             "errors": []
         }
         
-        # Get attachments for this ticket
+        # Get attachments for this ticket (now includes comment_id)
         attachments = self.zendesk.get_ticket_attachments(ticket_id)
         
         for attachment in attachments:
             attachment_url = attachment.get("content_url")
+            attachment_id = attachment.get("id")
+            comment_id = attachment.get("comment_id")
             filename = attachment.get("file_name", "unknown")
             content_type = attachment.get("content_type", "application/octet-stream")
             
@@ -174,6 +178,30 @@ class AttachmentOffloader:
                             "original": filename,
                             "s3_key": s3_key
                         })
+                        
+                        # Get Wasabi URL using the same method as in tickets view
+                        # This generates presigned URL with query parameters (AWSAccessKeyId, Signature, Expires)
+                        wasabi_url = self.wasabi.get_file_url(s3_key, expires_in=31536000)  # 1 year expiration
+                        
+                        if wasabi_url and attachment_id and comment_id:
+                            # Replace attachment in comment with Wasabi link and delete it
+                            success = self.zendesk.replace_attachment_in_comment(
+                                ticket_id=ticket_id,
+                                comment_id=comment_id,
+                                attachment_id=attachment_id,
+                                wasabi_url=wasabi_url,
+                                filename=filename
+                            )
+                            
+                            if success:
+                                result["attachments_deleted"] += 1
+                                print(f"Replaced attachment {filename} with Wasabi link and deleted from Zendesk")
+                            else:
+                                result["errors"].append(f"Failed to replace/delete attachment {filename} in Zendesk")
+                        elif not wasabi_url:
+                            result["errors"].append(f"Failed to generate Wasabi URL for {filename}")
+                        else:
+                            result["errors"].append(f"Missing attachment_id or comment_id for {filename}")
                     else:
                         result["errors"].append(f"Failed to upload {filename}")
                 else:
