@@ -48,6 +48,13 @@ Create a `.env` file with the following settings:
 - `SMTP_PASSWORD`: SMTP password or app password
 - `REPORT_EMAIL`: Email address to receive reports (default: it@go4rex.com)
 
+### Telegram Configuration
+- `Bot Token`: Get your bot token from @BotFather on Telegram
+- `Chat ID`: Your Telegram chat ID or channel ID
+
+### Slack Configuration
+- `Webhook URL`: Create an Incoming Webhook in your Slack workspace
+
 ### Admin Panel
 - `ADMIN_PANEL_PORT`: Port for admin panel (default: 5000)
 - `ADMIN_PANEL_HOST`: Host for admin panel (default: 0.0.0.0)
