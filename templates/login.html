@@ -26,16 +26,16 @@
 </head>
 <body class="bg-light">
     <div class="login-container">
-        <div class="container">
-            <div class="row justify-content-center align-items-center" style="min-height: 100vh;">
-                <div class="col-md-4">
+    <div class="container">
+        <div class="row justify-content-center align-items-center" style="min-height: 100vh;">
+            <div class="col-md-4">
                     <div class="text-center mb-4">
                         <img src="{{ url_for('static', filename='logo.svg') }}" alt="Logo" class="mb-3" style="width: 64px; height: 64px;">
                         <h2>Zendesk Offloader</h2>
                     </div>
-                    <div class="card shadow-sm">
-                        <div class="card-body">
-                            <h3 class="card-title mb-3 text-center">Admin Login</h3>
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h3 class="card-title mb-3 text-center">Admin Login</h3>
                         {% with messages = get_flashed_messages(with_categories=true) %}
                             {% if messages %}
                                 {% for category, message in messages %}
@@ -70,11 +70,11 @@
                             </div>
                             <button type="submit" class="btn btn-secondary w-100">Login with Password</button>
                         </form>
-                        </div>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
     </div>
     <footer class="bg-light border-top mt-auto py-3">
         <div class="container">
