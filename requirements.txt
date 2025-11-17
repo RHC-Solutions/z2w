@@ -8,3 +8,4 @@ python-dotenv==1.0.0
 requests==2.32.4
 sqlalchemy==2.0.44
 werkzeug==3.0.1
+botocore==1.34.0
