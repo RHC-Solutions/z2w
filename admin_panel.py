@@ -426,7 +426,18 @@ def settings():
             
             # Update settings in database and prepare .env updates
             env_updates = {}
+            scheduler_settings_changed = False
+            scheduler_keys = {'SCHEDULER_TIMEZONE', 'SCHEDULER_HOUR', 'SCHEDULER_MINUTE'}
+            
             for key, value in request.form.items():
+                # Check if scheduler settings changed
+                if key in scheduler_keys:
+                    old_setting = db.query(Setting).filter_by(key=key).first()
+                    if old_setting and old_setting.value != value:
+                        scheduler_settings_changed = True
+                    elif not old_setting:
+                        scheduler_settings_changed = True
+                
                 # Update database
                 setting = db.query(Setting).filter_by(key=key).first()
                 if setting:
@@ -479,10 +490,34 @@ def settings():
                 from config import reload_config
                 reload_config()
                 
+                # If scheduler settings changed, restart scheduler
+                if scheduler_settings_changed:
+                    try:
+                        sched = init_scheduler()
+                        was_running = sched.scheduler.running
+                        if was_running:
+                            sched.stop()
+                            import time
+                            time.sleep(1)
+                        
+                        # Reinitialize scheduler with new settings
+                        global scheduler
+                        scheduler = None
+                        sched = init_scheduler()
+                        
+                        if was_running:
+                            sched.start()
+                            flash('Settings updated successfully. Scheduler restarted with new settings.', 'success')
+                        else:
+                            flash('Settings updated successfully. Scheduler settings saved (scheduler was not running).', 'success')
+                    except Exception as e:
+                        flash(f'Settings saved but failed to restart scheduler: {str(e)}', 'warning')
+                else:
+                    flash('Settings updated successfully', 'success')
+                
             except Exception as e:
                 flash(f'Settings saved to database but failed to update .env file: {str(e)}', 'warning')
             
-            flash('Settings updated successfully', 'success')
             return redirect(url_for('settings'))
         
         # Get all settings from database
@@ -506,6 +541,9 @@ def settings():
             'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN', ''),
             'TELEGRAM_CHAT_ID': os.getenv('TELEGRAM_CHAT_ID', ''),
             'SLACK_WEBHOOK_URL': os.getenv('SLACK_WEBHOOK_URL', ''),
+            'SCHEDULER_TIMEZONE': os.getenv('SCHEDULER_TIMEZONE', 'UTC'),
+            'SCHEDULER_HOUR': os.getenv('SCHEDULER_HOUR', '0'),
+            'SCHEDULER_MINUTE': os.getenv('SCHEDULER_MINUTE', '0'),
         }
         
         # Merge with database settings (database takes priority)
@@ -900,6 +938,105 @@ def scheduler_status():
         'running': sched.scheduler.running,
         'next_run': next_run.isoformat() if next_run else None
     })
+
+@app.route('/api/scheduler/update', methods=['POST'])
+@login_required
+def update_scheduler_settings():
+    """Update scheduler settings and restart scheduler"""
+    try:
+        data = request.json
+        timezone = data.get('SCHEDULER_TIMEZONE', 'UTC')
+        hour = int(data.get('SCHEDULER_HOUR', 0))
+        minute = int(data.get('SCHEDULER_MINUTE', 0))
+        
+        # Validate inputs
+        if hour < 0 or hour > 23:
+            return jsonify({'success': False, 'message': 'Hour must be between 0 and 23'}), 400
+        if minute < 0 or minute > 59:
+            return jsonify({'success': False, 'message': 'Minute must be between 0 and 59'}), 400
+        
+        # Update settings in database
+        db = get_db()
+        try:
+            for key, value in [('SCHEDULER_TIMEZONE', timezone), ('SCHEDULER_HOUR', str(hour)), ('SCHEDULER_MINUTE', str(minute))]:
+                setting = db.query(Setting).filter_by(key=key).first()
+                if setting:
+                    setting.value = value
+                    setting.updated_at = datetime.utcnow()
+                else:
+                    setting = Setting(key=key, value=value)
+                    db.add(setting)
+            db.commit()
+        finally:
+            db.close()
+        
+        # Update .env file
+        from config import BASE_DIR
+        env_file = BASE_DIR / '.env'
+        env_lines = []
+        if env_file.exists():
+            with open(env_file, 'r') as f:
+                env_lines = f.readlines()
+        
+        new_lines = []
+        updated = {'SCHEDULER_TIMEZONE': False, 'SCHEDULER_HOUR': False, 'SCHEDULER_MINUTE': False}
+        for line in env_lines:
+            if line.strip().startswith('SCHEDULER_TIMEZONE='):
+                new_lines.append(f'SCHEDULER_TIMEZONE={timezone}\n')
+                updated['SCHEDULER_TIMEZONE'] = True
+            elif line.strip().startswith('SCHEDULER_HOUR='):
+                new_lines.append(f'SCHEDULER_HOUR={hour}\n')
+                updated['SCHEDULER_HOUR'] = True
+            elif line.strip().startswith('SCHEDULER_MINUTE='):
+                new_lines.append(f'SCHEDULER_MINUTE={minute}\n')
+                updated['SCHEDULER_MINUTE'] = True
+            else:
+                new_lines.append(line)
+        
+        # Add missing settings
+        if not updated['SCHEDULER_TIMEZONE']:
+            new_lines.append(f'SCHEDULER_TIMEZONE={timezone}\n')
+        if not updated['SCHEDULER_HOUR']:
+            new_lines.append(f'SCHEDULER_HOUR={hour}\n')
+        if not updated['SCHEDULER_MINUTE']:
+            new_lines.append(f'SCHEDULER_MINUTE={minute}\n')
+        
+        with open(env_file, 'w') as f:
+            f.writelines(new_lines)
+        
+        # Reload config
+        from config import reload_config
+        reload_config()
+        
+        # Restart scheduler with new settings
+        sched = init_scheduler()
+        was_running = sched.scheduler.running
+        if was_running:
+            sched.stop()
+            import time
+            time.sleep(1)
+        
+        # Reinitialize scheduler with new timezone
+        global scheduler
+        scheduler = None
+        sched = init_scheduler()
+        
+        if was_running:
+            sched.start()
+        
+        jobs = sched.scheduler.get_jobs()
+        next_run = jobs[0].next_run_time if jobs else None
+        
+        return jsonify({
+            'success': True,
+            'message': f'Scheduler settings updated successfully. Next run: {next_run.strftime("%Y-%m-%d %H:%M:%S") if next_run else "N/A"}',
+            'next_run': next_run.isoformat() if next_run else None
+        })
+    except Exception as e:
+        import logging
+        logger = logging.getLogger('zendesk_offloader')
+        logger.error(f'Error updating scheduler settings: {str(e)}', exc_info=True)
+        return jsonify({'success': False, 'message': f'Error updating scheduler: {str(e)}'}), 500
 
 @app.route('/api/reset_admin_password', methods=['POST'])
 @login_required

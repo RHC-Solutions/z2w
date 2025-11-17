@@ -96,6 +96,39 @@
     </div>
     
     <div class="row mt-4">
+        <div class="col-md-6">
+            <h3>Scheduler Configuration</h3>
+            <div class="mb-3">
+                <label class="form-label">Timezone</label>
+                <select class="form-select" name="SCHEDULER_TIMEZONE">
+                    <option value="UTC" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'UTC' %}selected{% endif %}>UTC</option>
+                    <option value="America/New_York" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/New_York' %}selected{% endif %}>Eastern Time (ET)</option>
+                    <option value="America/Chicago" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Chicago' %}selected{% endif %}>Central Time (CT)</option>
+                    <option value="America/Denver" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Denver' %}selected{% endif %}>Mountain Time (MT)</option>
+                    <option value="America/Los_Angeles" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Los_Angeles' %}selected{% endif %}>Pacific Time (PT)</option>
+                    <option value="Europe/London" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Europe/London' %}selected{% endif %}>London (GMT)</option>
+                    <option value="Europe/Paris" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Europe/Paris' %}selected{% endif %}>Paris (CET)</option>
+                    <option value="Asia/Tokyo" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Asia/Tokyo' %}selected{% endif %}>Tokyo (JST)</option>
+                </select>
+                <small class="form-text text-muted">Timezone for scheduled jobs</small>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Hour (0-23)</label>
+                <input type="number" class="form-control" name="SCHEDULER_HOUR" value="{{ settings.get('SCHEDULER_HOUR', '0') }}" min="0" max="23" required>
+                <small class="form-text text-muted">Hour of day to run scheduled job (24-hour format)</small>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Minute (0-59)</label>
+                <input type="number" class="form-control" name="SCHEDULER_MINUTE" value="{{ settings.get('SCHEDULER_MINUTE', '0') }}" min="0" max="59" required>
+                <small class="form-text text-muted">Minute of hour to run scheduled job</small>
+            </div>
+            <div class="alert alert-info">
+                <strong>Note:</strong> After saving scheduler settings, click "Restart Scheduler" on the Dashboard to apply changes.
+            </div>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
         <div class="col-md-12">
             <h3>Admin Password</h3>
             <div class="card border-warning">

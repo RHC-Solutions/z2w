@@ -40,9 +40,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
 # Scheduler Configuration
-SCHEDULER_TIMEZONE = "UTC"
-SCHEDULER_HOUR = 0
-SCHEDULER_MINUTE = 0
+SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "UTC")
+SCHEDULER_HOUR = int(os.getenv("SCHEDULER_HOUR", "0"))
+SCHEDULER_MINUTE = int(os.getenv("SCHEDULER_MINUTE", "0"))
 
 # Admin Panel
 ADMIN_PANEL_PORT = int(os.getenv("ADMIN_PANEL_PORT", "5000"))
@@ -81,6 +81,7 @@ def reload_config():
     global ADMIN_USERNAME, ADMIN_PASSWORD
     global SSL_CERT_PATH, SSL_KEY_PATH
     global OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_AUTHORITY, OAUTH_REDIRECT_PATH
+    global SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
     
     ZENDESK_SUBDOMAIN = os.getenv("ZENDESK_SUBDOMAIN", "")
     ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL", "")
@@ -111,5 +112,9 @@ def reload_config():
     OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "")
     OAUTH_AUTHORITY = os.getenv("OAUTH_AUTHORITY", "https://login.microsoftonline.com/common")
     OAUTH_REDIRECT_PATH = os.getenv("OAUTH_REDIRECT_PATH", "/getAToken")
+    
+    SCHEDULER_TIMEZONE = os.getenv("SCHEDULER_TIMEZONE", "UTC")
+    SCHEDULER_HOUR = int(os.getenv("SCHEDULER_HOUR", "0"))
+    SCHEDULER_MINUTE = int(os.getenv("SCHEDULER_MINUTE", "0"))
 
 

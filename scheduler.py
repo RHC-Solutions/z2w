@@ -19,6 +19,8 @@ class OffloadScheduler:
     """Manage scheduled offload jobs"""
     
     def __init__(self):
+        # Re-import config to get latest values
+        from config import SCHEDULER_TIMEZONE
         self.scheduler = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
         self.offloader = AttachmentOffloader()
         self.email_reporter = EmailReporter()
@@ -64,7 +66,10 @@ class OffloadScheduler:
     
     def start(self):
         """Start the scheduler"""
-        # Schedule daily job at 00:00 GMT
+        # Re-import config to get latest values
+        from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
+        
+        # Schedule daily job at configured time
         self.scheduler.add_job(
             self.scheduled_job,
             trigger=CronTrigger(hour=SCHEDULER_HOUR, minute=SCHEDULER_MINUTE, timezone=SCHEDULER_TIMEZONE),
@@ -73,7 +78,7 @@ class OffloadScheduler:
             replace_existing=True
         )
         
-        # Schedule log archiving job daily at 01:00 GMT (after offload job)
+        # Schedule log archiving job daily at 01:00 in configured timezone (after offload job)
         self.scheduler.add_job(
             self.archive_logs_job,
             trigger=CronTrigger(hour=1, minute=0, timezone=SCHEDULER_TIMEZONE),
