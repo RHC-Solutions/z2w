@@ -124,6 +124,7 @@ The application will:
 1. Initialize the database
 2. Start the scheduler (runs daily at 00:00 GMT)
 3. Launch the admin panel web interface
+4. Prompt you to create a custom admin password on the first successful login
 
 ### Access Admin Panel
 

@@ -23,6 +23,7 @@ app.secret_key = SECRET_KEY
 
 # Global scheduler instance
 scheduler = None
+FORCED_PASSWORD_CHANGE_ALLOWED_ENDPOINTS = {'setup_admin_password', 'logout'}
 
 # Error handler for API routes to return JSON instead of HTML
 @app.errorhandler(404)
@@ -89,8 +90,26 @@ def login_required(view_func):
                     'message': 'Authentication required. Please log in.'
                 }), 401
             return redirect(url_for('login', next=request.path))
+        if session.get('must_change_password'):
+            endpoint = request.endpoint or ''
+            if endpoint not in FORCED_PASSWORD_CHANGE_ALLOWED_ENDPOINTS:
+                if request.path.startswith('/api/'):
+                    return jsonify({
+                        'success': False,
+                        'message': 'Admin password setup required. Please create a new password.'
+                    }), 403
+                return redirect(url_for('setup_admin_password', next=request.path))
         return view_func(*args, **kwargs)
     return wrapper
+
+def _is_admin_password_configured():
+    """Check if admin password exists in database settings."""
+    db = get_db()
+    try:
+        setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+        return bool(setting and setting.value)
+    finally:
+        db.close()
 
 @app.route('/favicon.ico')
 def favicon():
@@ -126,6 +145,7 @@ def login():
         db = get_db()
         expected_username = ADMIN_USERNAME
         expected_password = ADMIN_PASSWORD
+        password_from_db = False
         try:
             admin_username_setting = db.query(Setting).filter_by(key='ADMIN_USERNAME').first()
             admin_password_setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
@@ -138,6 +158,7 @@ def login():
             
             if admin_password_setting and admin_password_setting.value:
                 expected_password = admin_password_setting.value  # Don't strip password
+                password_from_db = True
             elif ADMIN_PASSWORD:
                 expected_password = ADMIN_PASSWORD  # Don't strip password
         except Exception as e:
@@ -175,12 +196,45 @@ def login():
         if username_match and password_match:
             session['logged_in'] = True
             session['username'] = username
+            session['must_change_password'] = not password_from_db
+            if session['must_change_password']:
+                flash('Create a new admin password to finish setup.', 'warning')
+                return redirect(url_for('setup_admin_password', next=request.args.get('next')))
             next_url = request.args.get('next') or url_for('index')
             return redirect(next_url)
         flash('Invalid credentials', 'error')
         return render_template('login.html', oauth_enabled=bool(OAUTH_CLIENT_ID))
     
     return render_template('login.html', oauth_enabled=bool(OAUTH_CLIENT_ID))
+
+@app.route('/setup/admin_password', methods=['GET', 'POST'])
+@login_required
+def setup_admin_password():
+    """Force admin to create a password stored in the database."""
+    password_already_configured = _is_admin_password_configured()
+    if not session.get('must_change_password') and password_already_configured:
+        flash('Admin password is already configured.', 'info')
+        return redirect(url_for('index'))
+    
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        next_url = request.form.get('next') or url_for('index')
+        
+        if len(new_password) < 12:
+            flash('Password must be at least 12 characters long.', 'error')
+            return render_template('setup_admin_password.html', next_url=request.form.get('next'))
+        
+        if new_password != confirm_password:
+            flash('Passwords do not match.', 'error')
+            return render_template('setup_admin_password.html', next_url=request.form.get('next'))
+        
+        _save_admin_password(new_password)
+        session['must_change_password'] = False
+        flash('Admin password updated successfully.', 'success')
+        return redirect(next_url)
+    
+    return render_template('setup_admin_password.html', next_url=request.args.get('next'))
 
 @app.route('/login/oauth')
 def login_oauth():
@@ -283,6 +337,12 @@ def authorized():
             session['user_name'] = user_name
             session['logged_in'] = True
             session['username'] = user_name or user_email
+            session['must_change_password'] = not _is_admin_password_configured()
+            
+            if session['must_change_password']:
+                flash('Create a new admin password to finish setup.', 'warning')
+                next_url = request.args.get('next') or session.pop('next_url', None)
+                return redirect(url_for('setup_admin_password', next=next_url))
             
             next_url = request.args.get('next') or session.pop('next_url', None) or url_for('index')
             return redirect(next_url)
@@ -873,6 +933,44 @@ def reset_admin_password_public():
     
     return _reset_admin_password_internal()
 
+def _save_admin_password(new_password):
+    """Persist admin password to .env and database."""
+    from config import BASE_DIR, reload_config
+    env_file = BASE_DIR / '.env'
+    env_lines = []
+    if env_file.exists():
+        with open(env_file, 'r') as f:
+            env_lines = f.readlines()
+    env_updated = False
+    new_lines = []
+    if env_lines:
+        for line in env_lines:
+            if line.strip().startswith('ADMIN_PASSWORD='):
+                new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
+                env_updated = True
+            else:
+                new_lines.append(line)
+    else:
+        new_lines = []
+    if not env_updated:
+        new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
+    with open(env_file, 'w') as f:
+        f.writelines(new_lines)
+    db = get_db()
+    try:
+        setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+        if setting:
+            setting.value = new_password
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = Setting(key='ADMIN_PASSWORD', value=new_password)
+            db.add(setting)
+        db.commit()
+    finally:
+        db.close()
+    reload_config()
+    return env_file
+
 def _reset_admin_password_internal():
     """Reset admin password and send to Telegram"""
     try:
@@ -886,53 +984,8 @@ def _reset_admin_password_internal():
         # Generate new password
         new_password = generate_secure_password(64)
         
-        # Update password in .env file
-        env_file = BASE_DIR / '.env'
-        env_updated = False
-        
-        if env_file.exists():
-            # Read existing .env file
-            with open(env_file, 'r') as f:
-                lines = f.readlines()
-            
-            # Update ADMIN_PASSWORD line
-            new_lines = []
-            for line in lines:
-                if line.strip().startswith('ADMIN_PASSWORD='):
-                    new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
-                    env_updated = True
-                else:
-                    new_lines.append(line)
-            
-            # If ADMIN_PASSWORD not found, add it
-            if not env_updated:
-                new_lines.append(f'ADMIN_PASSWORD={new_password}\n')
-            
-            # Write back to file
-            with open(env_file, 'w') as f:
-                f.writelines(new_lines)
-        else:
-            # Create .env file if it doesn't exist
-            with open(env_file, 'w') as f:
-                f.write(f'ADMIN_PASSWORD={new_password}\n')
-        
-        # Update password in database
-        db = get_db()
-        try:
-            setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
-            if setting:
-                setting.value = new_password
-                setting.updated_at = datetime.utcnow()
-            else:
-                setting = Setting(key='ADMIN_PASSWORD', value=new_password)
-                db.add(setting)
-            db.commit()
-        finally:
-            db.close()
-        
-        # Reload config to ensure new password is loaded
-        from config import reload_config
-        reload_config()
+        # Update password storage
+        env_file = _save_admin_password(new_password)
         
         # Verify the new password was saved correctly by reading from .env
         # This ensures we're sending the actual new password, not any cached value
