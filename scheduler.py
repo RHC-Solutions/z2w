@@ -21,7 +21,16 @@ class OffloadScheduler:
     def __init__(self):
         # Re-import config to get latest values
         from config import SCHEDULER_TIMEZONE
-        self.scheduler = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
+        
+        # Initialize scheduler with timezone handling for Linux/Debian compatibility
+        try:
+            self.scheduler = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
+            logger.info(f"Scheduler initialized with timezone: {SCHEDULER_TIMEZONE}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize scheduler with timezone {SCHEDULER_TIMEZONE}: {e}")
+            logger.info("Falling back to UTC timezone")
+            self.scheduler = BackgroundScheduler(timezone='UTC')
+        
         self.offloader = AttachmentOffloader()
         self.email_reporter = EmailReporter()
         self.telegram_reporter = TelegramReporter()
@@ -69,28 +78,46 @@ class OffloadScheduler:
         # Re-import config to get latest values
         from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
         
-        # Schedule daily job at configured time
-        self.scheduler.add_job(
-            self.scheduled_job,
-            trigger=CronTrigger(hour=SCHEDULER_HOUR, minute=SCHEDULER_MINUTE, timezone=SCHEDULER_TIMEZONE),
-            id='daily_offload',
-            name='Daily Zendesk Offload',
-            replace_existing=True
-        )
-        
-        # Schedule log archiving job daily at 01:00 in configured timezone (after offload job)
-        self.scheduler.add_job(
-            self.archive_logs_job,
-            trigger=CronTrigger(hour=1, minute=0, timezone=SCHEDULER_TIMEZONE),
-            id='archive_logs',
-            name='Daily Log Archiving',
-            replace_existing=True
-        )
-        
-        self.scheduler.start()
-        next_run = self.scheduler.get_jobs()[0].next_run_time if self.scheduler.get_jobs() else None
-        logger.info(f"Scheduler started. Next run: {next_run}")
-        print(f"Scheduler started. Next run: {next_run}")
+        try:
+            # Schedule daily job at configured time
+            self.scheduler.add_job(
+                self.scheduled_job,
+                trigger=CronTrigger(hour=SCHEDULER_HOUR, minute=SCHEDULER_MINUTE, timezone=SCHEDULER_TIMEZONE),
+                id='daily_offload',
+                name='Daily Zendesk Offload',
+                replace_existing=True
+            )
+            logger.info(f"Scheduled daily offload job for {SCHEDULER_HOUR:02d}:{SCHEDULER_MINUTE:02d} {SCHEDULER_TIMEZONE}")
+            
+            # Schedule log archiving job daily at 01:00 in configured timezone (after offload job)
+            self.scheduler.add_job(
+                self.archive_logs_job,
+                trigger=CronTrigger(hour=1, minute=0, timezone=SCHEDULER_TIMEZONE),
+                id='archive_logs',
+                name='Daily Log Archiving',
+                replace_existing=True
+            )
+            logger.info(f"Scheduled log archiving job for 01:00 {SCHEDULER_TIMEZONE}")
+            
+            self.scheduler.start()
+            
+            # Log all scheduled jobs
+            jobs = self.scheduler.get_jobs()
+            if jobs:
+                for job in jobs:
+                    logger.info(f"Job '{job.name}' (ID: {job.id}) - Next run: {job.next_run_time}")
+                    print(f"Job '{job.name}' - Next run: {job.next_run_time}")
+            else:
+                logger.warning("No jobs scheduled!")
+                print("WARNING: No jobs scheduled!")
+            
+            logger.info("Scheduler started successfully")
+            print("Scheduler started successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to start scheduler: {e}", exc_info=True)
+            print(f"ERROR: Failed to start scheduler: {e}")
+            raise
     
     def stop(self):
         """Stop the scheduler"""
