@@ -46,7 +46,7 @@ class ZendeskClient:
     
     def get_all_tickets(self, status: str = "all") -> List[Dict]:
         """
-        Get all tickets from Zendesk
+        Get all tickets from Zendesk using cursor-based pagination
         Returns list of ticket dictionaries
         """
         if not self.base_url:
@@ -54,23 +54,42 @@ class ZendeskClient:
             return []
         
         tickets = []
-        url = f"{self.base_url}/tickets.json"
-        params = {"status": status}
+        # Use incremental export API with cursor-based pagination
+        # This endpoint is designed for fetching large numbers of tickets
+        url = f"{self.base_url}/incremental/tickets/cursor.json"
+        params = {"start_time": "0"}  # Start from the beginning
         
-        print(f"Fetching tickets from Zendesk: {url}")
+        print(f"Fetching tickets from Zendesk using cursor-based pagination: {url}")
         
-        while url:
+        has_more = True
+        page_count = 0
+        
+        while has_more:
             try:
                 response = self.session.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
+                
                 page_tickets = data.get("tickets", [])
                 tickets.extend(page_tickets)
-                print(f"Fetched {len(page_tickets)} tickets (total: {len(tickets)})")
+                page_count += 1
+                print(f"Fetched page {page_count}: {len(page_tickets)} tickets (total: {len(tickets)})")
                 
-                # Check for next page
-                url = data.get("next_page")
-                params = None  # next_page already includes params
+                # Check for more pages using cursor pagination
+                has_more = not data.get("end_of_stream", False)
+                
+                if has_more:
+                    # Get the after_cursor for next page
+                    after_cursor = data.get("after_cursor")
+                    if after_cursor:
+                        # Update URL and params for next request
+                        url = f"{self.base_url}/incremental/tickets/cursor.json"
+                        params = {"cursor": after_cursor}
+                    else:
+                        # No cursor provided, stop pagination
+                        has_more = False
+                        print("No after_cursor provided, ending pagination")
+                        
             except requests.exceptions.HTTPError as e:
                 error_msg = f"HTTP Error fetching tickets: {e.response.status_code} - {e.response.text}"
                 print(f"ERROR: {error_msg}")
@@ -79,6 +98,12 @@ class ZendeskClient:
                 error_msg = f"Error fetching tickets: {e}"
                 print(f"ERROR: {error_msg}")
                 raise Exception(error_msg)
+        
+        # Filter by status if needed (incremental API returns all tickets)
+        if status != "all":
+            original_count = len(tickets)
+            tickets = [t for t in tickets if t.get("status") == status]
+            print(f"Filtered tickets by status '{status}': {len(tickets)} out of {original_count}")
         
         print(f"Total tickets fetched: {len(tickets)}")
         return tickets
