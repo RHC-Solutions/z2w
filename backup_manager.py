@@ -63,7 +63,7 @@ class BackupManager:
             app_folder_name = self.app_dir.name
             
             cmd = [
-                'tar',
+                '/usr/bin/tar',
                 '-czf',
                 str(backup_path),
                 '-C',
@@ -179,7 +179,7 @@ class BackupManager:
             logger.info(f"Verifying backup: {backup_path.name}")
             
             result = subprocess.run(
-                ['tar', '-tzf', str(backup_path)],
+                ['/usr/bin/tar', '-tzf', str(backup_path)],
                 capture_output=True,
                 text=True,
                 timeout=60
