@@ -605,7 +605,7 @@ class ZendeskClient:
     def get_new_tickets(self, processed_ticket_ids: set) -> List[Dict]:
         """
         Get only new tickets that haven't been processed
-        Only checks recent tickets for efficiency (last 500)
+        Fetches ALL tickets to find new ones (uses cursor pagination, no 10K limit)
         """
         print(f"Getting new tickets. Already processed: {len(processed_ticket_ids)} tickets")
         
@@ -616,28 +616,29 @@ class ZendeskClient:
         max_processed_id = max(processed_ticket_ids) if processed_ticket_ids else 0
         print(f"Max processed ticket ID: {max_processed_id}")
         
-        # Only fetch recent tickets (last 5 pages = 500 tickets)
-        # This is much faster and sufficient for catching new tickets
-        tickets = []
+        # Fetch ALL tickets using cursor pagination
+        # This is necessary because new tickets could be anywhere in the list
+        all_tickets = []
         url = f"{self.base_url}/tickets.json"
         params = {"page[size]": 100}
         
         page_count = 0
-        max_pages = 5  # Only check last 500 tickets
         
-        print(f"Fetching last {max_pages * 100} tickets to check for new ones...")
+        print(f"Fetching all tickets to find new ones...")
         
-        while url and page_count < max_pages:
+        while url:
             try:
                 response = self.session.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
                 
                 page_tickets = data.get("tickets", [])
-                tickets.extend(page_tickets)
+                all_tickets.extend(page_tickets)
                 page_count += 1
                 
-                print(f"Fetched page {page_count}: {len(page_tickets)} tickets")
+                # Show progress every 20 pages
+                if page_count % 20 == 0:
+                    print(f"Fetched {page_count} pages, {len(all_tickets)} tickets so far...")
                 
                 # Check for next page
                 links = data.get("links", {})
@@ -655,16 +656,18 @@ class ZendeskClient:
                 logger.error(f"Error fetching tickets: {e}")
                 break
         
+        print(f"Fetched total of {len(all_tickets)} tickets in {page_count} pages")
+        
         # Filter to only new tickets
         new_tickets = [
-            ticket for ticket in tickets 
+            ticket for ticket in all_tickets 
             if ticket.get("id") not in processed_ticket_ids
         ]
         
         # Sort by ID descending (newest first)
         new_tickets.sort(key=lambda x: x.get("id", 0), reverse=True)
         
-        print(f"Found {len(new_tickets)} new tickets out of {len(tickets)} checked")
+        print(f"Found {len(new_tickets)} new tickets")
         if new_tickets:
             ids = [t.get("id") for t in new_tickets[:5]]
             print(f"New ticket IDs: {ids}")
