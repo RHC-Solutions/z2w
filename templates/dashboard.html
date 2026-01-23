@@ -34,6 +34,7 @@
             <div class="card-body">
                 <h5 class="card-title">Actions</h5>
                 <button class="btn btn-primary btn-sm" onclick="runNow()">Run Now</button>
+                <button class="btn btn-info btn-sm" onclick="backupNow()">Backup Now</button>
                 <button class="btn btn-success btn-sm" onclick="startScheduler()">Start Scheduler</button>
                 <button class="btn btn-danger btn-sm" onclick="stopScheduler()">Stop Scheduler</button>
             </div>
@@ -97,6 +98,17 @@ function runNow() {
             alert(data.message);
             if (data.success) location.reload();
         });
+}
+
+function backupNow() {
+    if (confirm('Create a full backup now? This may take a minute and will be sent to Telegram/Slack.')) {
+        fetch('/api/backup_now', {method: 'POST'})
+            .then(r => r.json())
+            .then(data => {
+                alert(data.message);
+                if (data.success) location.reload();
+            });
+    }
 }
 
 function startScheduler() {

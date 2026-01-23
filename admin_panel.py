@@ -902,6 +902,17 @@ def run_now():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+@app.route('/api/backup_now', methods=['POST'])
+@login_required
+def backup_now():
+    """Manually trigger backup"""
+    try:
+        sched = init_scheduler()
+        sched.run_backup_now()
+        return jsonify({'success': True, 'message': 'Backup job started'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
 @app.route('/api/scheduler/start', methods=['POST'])
 @login_required
 def start_scheduler():

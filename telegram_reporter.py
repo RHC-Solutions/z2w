@@ -5,6 +5,7 @@ import requests
 import logging
 from datetime import datetime
 from typing import Dict, Optional
+from pathlib import Path
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 # Get logger
@@ -17,8 +18,10 @@ class TelegramReporter:
         self.bot_token = bot_token or TELEGRAM_BOT_TOKEN
         self.chat_id = chat_id or TELEGRAM_CHAT_ID
         self.api_url = None
+        self.file_api_url = None
         if self.bot_token:
             self.api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            self.file_api_url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
     
     def send_report(self, summary: Dict) -> bool:
         """
@@ -134,4 +137,68 @@ class TelegramReporter:
                 message += f"... and {len(summary['details']) - 5} more tickets\n"
         
         return message.strip()
+
+    def send_file(self, file_path: Path, caption: Optional[str] = None) -> bool:
+        """
+        Send a file to Telegram
+        
+        Args:
+            file_path: Path to the file to send
+            caption: Optional caption for the file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.bot_token or not self.chat_id:
+            logger.warning("Telegram bot token or chat ID not configured")
+            return False
+        
+        if not self.file_api_url:
+            logger.warning("Telegram file API URL not initialized")
+            return False
+        
+        if not file_path.exists():
+            logger.error(f"File not found: {file_path}")
+            return False
+        
+        try:
+            logger.info(f"Sending file to Telegram: {file_path.name}")
+            
+            with open(file_path, 'rb') as f:
+                files = {
+                    'document': (file_path.name, f)
+                }
+                
+                data = {
+                    'chat_id': self.chat_id
+                }
+                
+                if caption:
+                    data['caption'] = caption
+                
+                response = requests.post(
+                    self.file_api_url,
+                    data=data,
+                    files=files,
+                    timeout=300  # 5 minute timeout for large files
+                )
+                
+                response.raise_for_status()
+                
+                logger.info(f"File sent to Telegram successfully: {file_path.name}")
+                return True
+                
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"HTTP error sending file to Telegram: {e}"
+            if hasattr(e.response, 'text'):
+                error_msg += f" - Response: {e.response.text}"
+            logger.error(error_msg)
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error sending file to Telegram: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error sending file to Telegram: {e}")
+            return False
+
 

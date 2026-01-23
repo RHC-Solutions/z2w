@@ -6,7 +6,9 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, Optional
+from pathlib import Path
 from config import SLACK_WEBHOOK_URL
+import os
 
 # Get logger
 logger = logging.getLogger('zendesk_offloader')
@@ -14,8 +16,10 @@ logger = logging.getLogger('zendesk_offloader')
 class SlackReporter:
     """Send reports to Slack"""
     
-    def __init__(self, webhook_url: Optional[str] = None):
+    def __init__(self, webhook_url: Optional[str] = None, bot_token: Optional[str] = None):
         self.webhook_url = webhook_url or SLACK_WEBHOOK_URL
+        # For file uploads, we need a bot token with files:write scope
+        self.bot_token = bot_token or os.getenv("SLACK_BOT_TOKEN", "")
     
     def send_report(self, summary: Dict) -> bool:
         """
@@ -132,4 +136,88 @@ class SlackReporter:
         }
         
         return payload
+
+    def send_file(self, file_path: Path, caption: Optional[str] = None, channels: Optional[str] = None) -> bool:
+        """
+        Send a file to Slack using the files.upload API
+        
+        Note: This requires a Slack Bot Token with files:write scope in SLACK_BOT_TOKEN env var.
+        If not configured, the file won't be sent but won't cause the backup to fail.
+        
+        Args:
+            file_path: Path to the file to send
+            caption: Optional caption/comment for the file
+            channels: Comma-separated channel IDs (if not provided, file is private)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.bot_token:
+            logger.warning("Slack bot token not configured - cannot send file. Set SLACK_BOT_TOKEN env var.")
+            logger.info("To enable Slack file uploads:")
+            logger.info("1. Create a Slack App at https://api.slack.com/apps")
+            logger.info("2. Add 'files:write' OAuth scope")
+            logger.info("3. Install app to workspace and get Bot User OAuth Token")
+            logger.info("4. Set SLACK_BOT_TOKEN environment variable")
+            return False
+        
+        if not file_path.exists():
+            logger.error(f"File not found: {file_path}")
+            return False
+        
+        try:
+            logger.info(f"Sending file to Slack: {file_path.name}")
+            
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (file_path.name, f)
+                }
+                
+                data = {
+                    'filename': file_path.name,
+                    'title': file_path.name
+                }
+                
+                if caption:
+                    data['initial_comment'] = caption
+                
+                if channels:
+                    data['channels'] = channels
+                
+                headers = {
+                    'Authorization': f'Bearer {self.bot_token}'
+                }
+                
+                response = requests.post(
+                    'https://slack.com/api/files.upload',
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=300  # 5 minute timeout for large files
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                if result.get('ok'):
+                    logger.info(f"File sent to Slack successfully: {file_path.name}")
+                    return True
+                else:
+                    error = result.get('error', 'Unknown error')
+                    logger.error(f"Slack API error: {error}")
+                    return False
+                    
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"HTTP error sending file to Slack: {e}"
+            if hasattr(e.response, 'text'):
+                error_msg += f" - Response: {e.response.text}"
+            logger.error(error_msg)
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error sending file to Slack: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error sending file to Slack: {e}")
+            return False
+
 
