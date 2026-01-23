@@ -6,6 +6,7 @@ import os
 import subprocess
 import logging
 import shutil
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -35,13 +36,30 @@ class BackupManager:
         backup_filename = f"z2w_backup_{timestamp}.tar.gz"
         backup_path = self.backup_dir / backup_filename
         
+        # Get system information
+        hostname = socket.gethostname()
+        username = os.getenv('USER') or os.getenv('USERNAME') or 'unknown'
+        
+        # Get IP address
+        try:
+            # Get primary IP address
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip_address = s.getsockname()[0]
+            s.close()
+        except Exception:
+            ip_address = 'unknown'
+        
         summary = {
             'timestamp': datetime.now(),
             'backup_file': backup_filename,
             'backup_path': str(backup_path),
             'size_mb': 0,
             'success': False,
-            'error': None
+            'error': None,
+            'server_name': hostname,
+            'server_ip': ip_address,
+            'server_user': username
         }
         
         try:

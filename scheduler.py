@@ -138,11 +138,19 @@ class OffloadScheduler:
             timestamp = summary['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
             size_mb = summary['size_mb']
             filename = summary['backup_file']
+            server_name = summary.get('server_name', 'unknown')
+            server_ip = summary.get('server_ip', 'unknown')
+            server_user = summary.get('server_user', 'unknown')
             
             message = f"""
 🔄 <b>Automated Daily Backup</b>
 
 ✅ Backup created successfully
+
+🖥️ <b>Server Info:</b>
+• Name: {server_name}
+• IP: {server_ip}
+• User: {server_user}
 
 📅 <b>Date:</b> {timestamp} UTC
 📦 <b>File:</b> {filename}
@@ -163,7 +171,7 @@ The backup file is being sent to you now...
             
             # Send backup file to Telegram
             logger.info("Uploading backup file to Telegram...")
-            caption = f"📦 Z2W Backup - {timestamp} UTC ({size_mb:.2f} MB)"
+            caption = f"📦 Z2W Backup - {server_name} ({server_ip}) - {timestamp} UTC ({size_mb:.2f} MB)"
             telegram_sent = self.telegram_reporter.send_file(backup_path, caption=caption)
             
             if telegram_sent:
@@ -172,7 +180,7 @@ The backup file is being sent to you now...
                 logger.warning("Failed to send backup file to Telegram")
             
             # Send backup notification to Slack (file upload requires SLACK_BOT_TOKEN)
-            slack_message = f"🔄 *Automated Daily Backup*\n\n✅ Backup created successfully\n\n*Date:* {timestamp} UTC\n*File:* {filename}\n*Size:* {size_mb:.2f} MB\n\n*Contents:* Application code, Database, Configuration, Logs"
+            slack_message = f"🔄 *Automated Daily Backup*\n\n✅ Backup created successfully\n\n*Server:* {server_name} ({server_ip})\n*User:* {server_user}\n*Date:* {timestamp} UTC\n*File:* {filename}\n*Size:* {size_mb:.2f} MB\n\n*Contents:* Application code, Database, Configuration, Logs"
             
             # Try to send file to Slack if bot token is configured
             slack_file_sent = self.slack_reporter.send_file(backup_path, caption=slack_message)
@@ -196,6 +204,8 @@ The backup file is being sent to you now...
                             "type": "section",
                             "fields": [
                                 {"type": "mrkdwn", "text": f"*Status:*\n✅ Success"},
+                                {"type": "mrkdwn", "text": f"*Server:*\n{server_name} ({server_ip})"},
+                                {"type": "mrkdwn", "text": f"*User:*\n{server_user}"},
                                 {"type": "mrkdwn", "text": f"*Date:*\n{timestamp} UTC"},
                                 {"type": "mrkdwn", "text": f"*File:*\n{filename}"},
                                 {"type": "mrkdwn", "text": f"*Size:*\n{size_mb:.2f} MB"}
