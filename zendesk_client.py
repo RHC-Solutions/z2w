@@ -4,6 +4,7 @@ Zendesk API client for fetching tickets and attachments
 import requests
 import base64
 import re
+import time
 from typing import List, Dict, Optional
 from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
 
@@ -46,7 +47,7 @@ class ZendeskClient:
     
     def get_all_tickets(self, status: str = "all") -> List[Dict]:
         """
-        Get all tickets from Zendesk using cursor-based pagination
+        Get all tickets from Zendesk using the List Tickets endpoint with cursor-based pagination
         Returns list of ticket dictionaries
         """
         if not self.base_url:
@@ -54,41 +55,66 @@ class ZendeskClient:
             return []
         
         tickets = []
-        # Use incremental export API with cursor-based pagination
-        # This endpoint is designed for fetching large numbers of tickets
-        url = f"{self.base_url}/incremental/tickets/cursor.json"
-        params = {"start_time": "0"}  # Start from the beginning
+        # Use the List Tickets endpoint which supports cursor-based pagination
+        # and doesn't have the search response size limits
+        url = f"{self.base_url}/tickets.json"
         
-        print(f"Fetching tickets from Zendesk using cursor-based pagination: {url}")
+        params = {
+            "page[size]": 100  # Fetch 100 tickets per page (max allowed)
+        }
         
-        has_more = True
+        print(f"Fetching tickets from Zendesk using List Tickets API with cursor pagination")
+        
         page_count = 0
+        retry_count = 0
+        max_retries = 3
         
-        while has_more:
+        while url:
             try:
                 response = self.session.get(url, params=params)
+                
+                # Handle rate limiting with exponential backoff
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"Rate limit hit. Waiting {retry_after} seconds before retry {retry_count}/{max_retries}...")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        error_msg = f"Rate limit exceeded after {max_retries} retries"
+                        print(f"ERROR: {error_msg}")
+                        raise Exception(error_msg)
+                
                 response.raise_for_status()
                 data = response.json()
+                
+                # Reset retry count on success
+                retry_count = 0
                 
                 page_tickets = data.get("tickets", [])
                 tickets.extend(page_tickets)
                 page_count += 1
                 print(f"Fetched page {page_count}: {len(page_tickets)} tickets (total: {len(tickets)})")
                 
-                # Check for more pages using cursor pagination
-                has_more = not data.get("end_of_stream", False)
+                # Check for next page - Zendesk uses links.next for cursor pagination
+                links = data.get("links", {})
+                next_page = links.get("next")
                 
-                if has_more:
-                    # Get the after_cursor for next page
-                    after_cursor = data.get("after_cursor")
-                    if after_cursor:
-                        # Update URL and params for next request
-                        url = f"{self.base_url}/incremental/tickets/cursor.json"
-                        params = {"cursor": after_cursor}
+                if next_page:
+                    url = next_page
+                    params = None  # next_page URL already includes all params
+                    # Add small delay between requests to avoid rate limiting
+                    time.sleep(0.5)
+                else:
+                    # Also check meta for has_more flag
+                    meta = data.get("meta", {})
+                    if not meta.get("has_more", False):
+                        url = None
                     else:
-                        # No cursor provided, stop pagination
-                        has_more = False
-                        print("No after_cursor provided, ending pagination")
+                        # Shouldn't happen, but fallback to None to avoid infinite loop
+                        print("Warning: has_more is true but no next link found")
+                        url = None
                         
             except requests.exceptions.HTTPError as e:
                 error_msg = f"HTTP Error fetching tickets: {e.response.status_code} - {e.response.text}"
@@ -99,7 +125,7 @@ class ZendeskClient:
                 print(f"ERROR: {error_msg}")
                 raise Exception(error_msg)
         
-        # Filter by status if needed (incremental API returns all tickets)
+        # Filter by status if needed
         if status != "all":
             original_count = len(tickets)
             tickets = [t for t in tickets if t.get("status") == status]
