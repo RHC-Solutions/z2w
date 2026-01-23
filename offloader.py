@@ -4,10 +4,14 @@ Main offload logic for processing tickets and uploading attachments
 from datetime import datetime
 from typing import Dict, List
 import json
+import logging
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
 from database import get_db, ProcessedTicket, OffloadLog
 from sqlalchemy.exc import IntegrityError
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class AttachmentOffloader:
     """Main class for offloading attachments from Zendesk to Wasabi"""
@@ -75,6 +79,7 @@ class AttachmentOffloader:
             except Exception as e:
                 error_msg = f"Failed to fetch tickets from Zendesk: {str(e)}"
                 print(f"ERROR: {error_msg}")
+                logger.error(error_msg)
                 summary["errors"].append(error_msg)
                 return summary
             
@@ -94,33 +99,59 @@ class AttachmentOffloader:
                     wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
                     
                     # Mark ticket as processed in database
-                    processed_ticket = ProcessedTicket(
-                        ticket_id=ticket_id,
-                        attachments_count=result["attachments_uploaded"],
-                        status="processed",
-                        wasabi_files=wasabi_files_json
-                    )
-                    db.add(processed_ticket)
-                    db.commit()
+                    # Check if ticket already exists (in case of race condition)
+                    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+                    if existing:
+                        # Update existing record
+                        existing.processed_at = datetime.utcnow()
+                        existing.attachments_count = result["attachments_uploaded"]
+                        existing.status = "processed"
+                        existing.error_message = None
+                        existing.wasabi_files = wasabi_files_json
+                        db.commit()
+                        print(f"Updated existing processed ticket record for ticket {ticket_id}")
+                    else:
+                        # Create new record
+                        processed_ticket = ProcessedTicket(
+                            ticket_id=ticket_id,
+                            attachments_count=result["attachments_uploaded"],
+                            status="processed",
+                            wasabi_files=wasabi_files_json
+                        )
+                        db.add(processed_ticket)
+                        db.commit()
                     
                     # Mark ticket as read in Zendesk
                     self.zendesk.mark_ticket_as_read(ticket_id)
                     
                 except Exception as e:
+                    db.rollback()  # Rollback any pending transaction
                     error_msg = f"Error processing ticket {ticket_id}: {str(e)}"
                     summary["errors"].append(error_msg)
+                    print(f"ERROR: {error_msg}")
+                    logger.error(error_msg)
                     
-                    # Log failed ticket
-                    processed_ticket = ProcessedTicket(
-                        ticket_id=ticket_id,
-                        attachments_count=0,
-                        status="error",
-                        error_message=str(e)
-                    )
+                    # Log failed ticket - check if already exists first
                     try:
-                        db.add(processed_ticket)
-                        db.commit()
-                    except IntegrityError:
+                        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+                        if existing:
+                            # Update existing record with error
+                            existing.processed_at = datetime.utcnow()
+                            existing.status = "error"
+                            existing.error_message = str(e)
+                            db.commit()
+                        else:
+                            # Create new error record
+                            processed_ticket = ProcessedTicket(
+                                ticket_id=ticket_id,
+                                attachments_count=0,
+                                status="error",
+                                error_message=str(e)
+                            )
+                            db.add(processed_ticket)
+                            db.commit()
+                    except Exception as db_error:
+                        print(f"Warning: Could not log error for ticket {ticket_id}: {db_error}")
                         db.rollback()
                 finally:
                     db.close()

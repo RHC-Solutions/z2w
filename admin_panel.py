@@ -386,7 +386,7 @@ def index():
         
         recent_logs = db.query(OffloadLog).order_by(
             OffloadLog.run_date.desc()
-        ).limit(10).all()
+        ).all()
         
         # Get scheduler status
         sched = init_scheduler()

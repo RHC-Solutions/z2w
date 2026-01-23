@@ -2,9 +2,13 @@
 Telegram reporting functionality
 """
 import requests
+import logging
 from datetime import datetime
 from typing import Dict, Optional
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class TelegramReporter:
     """Send reports to Telegram"""
@@ -22,10 +26,15 @@ class TelegramReporter:
         """
         if not self.bot_token or not self.chat_id:
             print("Telegram bot token or chat ID not configured")
+            logger.warning("Telegram bot token or chat ID not configured")
             return False
         
         try:
             message = self._format_report(summary)
+            
+            # Log the full report being sent
+            logger.info("Sending Telegram report:")
+            logger.info(message)
             
             payload = {
                 "chat_id": self.chat_id,
@@ -36,9 +45,12 @@ class TelegramReporter:
             response = requests.post(self.api_url, json=payload, timeout=10)
             response.raise_for_status()
             
+            logger.info("Telegram report sent successfully")
             return True
         except Exception as e:
-            print(f"Error sending Telegram report: {e}")
+            error_msg = f"Error sending Telegram report: {e}"
+            print(error_msg)
+            logger.error(error_msg)
             return False
     
     def send_message(self, message: str) -> bool:

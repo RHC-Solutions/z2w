@@ -3,9 +3,13 @@ Slack reporting functionality
 """
 import requests
 import json
+import logging
 from datetime import datetime
 from typing import Dict, Optional
 from config import SLACK_WEBHOOK_URL
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class SlackReporter:
     """Send reports to Slack"""
@@ -19,10 +23,15 @@ class SlackReporter:
         """
         if not self.webhook_url:
             print("Slack webhook URL not configured")
+            logger.warning("Slack webhook URL not configured")
             return False
         
         try:
             payload = self._format_report(summary)
+            
+            # Log the full report being sent (formatted as JSON for readability)
+            logger.info("Sending Slack report:")
+            logger.info(json.dumps(payload, indent=2, default=str))
             
             response = requests.post(
                 self.webhook_url,
@@ -32,9 +41,12 @@ class SlackReporter:
             )
             response.raise_for_status()
             
+            logger.info("Slack report sent successfully")
             return True
         except Exception as e:
-            print(f"Error sending Slack report: {e}")
+            error_msg = f"Error sending Slack report: {e}"
+            print(error_msg)
+            logger.error(error_msg)
             return False
     
     def _format_report(self, summary: Dict) -> Dict:

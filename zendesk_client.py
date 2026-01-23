@@ -5,8 +5,12 @@ import requests
 import base64
 import re
 import time
+import logging
 from typing import List, Dict, Optional
 from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class ZendeskClient:
     """Client for interacting with Zendesk API"""
@@ -104,8 +108,8 @@ class ZendeskClient:
                 if next_page:
                     url = next_page
                     params = None  # next_page URL already includes all params
-                    # Add small delay between requests to avoid rate limiting
-                    time.sleep(0.5)
+                    # Minimal delay between requests
+                    time.sleep(0.1)
                 else:
                     # Also check meta for has_more flag
                     meta = data.get("meta", {})
@@ -601,14 +605,70 @@ class ZendeskClient:
     def get_new_tickets(self, processed_ticket_ids: set) -> List[Dict]:
         """
         Get only new tickets that haven't been processed
+        Only checks recent tickets for efficiency (last 500)
         """
         print(f"Getting new tickets. Already processed: {len(processed_ticket_ids)} tickets")
-        all_tickets = self.get_all_tickets()
+        
+        if not self.base_url:
+            print("ERROR: Zendesk base_url is not set.")
+            return []
+        
+        max_processed_id = max(processed_ticket_ids) if processed_ticket_ids else 0
+        print(f"Max processed ticket ID: {max_processed_id}")
+        
+        # Only fetch recent tickets (last 5 pages = 500 tickets)
+        # This is much faster and sufficient for catching new tickets
+        tickets = []
+        url = f"{self.base_url}/tickets.json"
+        params = {"page[size]": 100}
+        
+        page_count = 0
+        max_pages = 5  # Only check last 500 tickets
+        
+        print(f"Fetching last {max_pages * 100} tickets to check for new ones...")
+        
+        while url and page_count < max_pages:
+            try:
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                page_tickets = data.get("tickets", [])
+                tickets.extend(page_tickets)
+                page_count += 1
+                
+                print(f"Fetched page {page_count}: {len(page_tickets)} tickets")
+                
+                # Check for next page
+                links = data.get("links", {})
+                next_page = links.get("next")
+                
+                if next_page:
+                    url = next_page
+                    params = None
+                    time.sleep(0.1)
+                else:
+                    break
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching tickets: {e}")
+                logger.error(f"Error fetching tickets: {e}")
+                break
+        
+        # Filter to only new tickets
         new_tickets = [
-            ticket for ticket in all_tickets 
+            ticket for ticket in tickets 
             if ticket.get("id") not in processed_ticket_ids
         ]
-        print(f"Found {len(new_tickets)} new tickets out of {len(all_tickets)} total")
+        
+        # Sort by ID descending (newest first)
+        new_tickets.sort(key=lambda x: x.get("id", 0), reverse=True)
+        
+        print(f"Found {len(new_tickets)} new tickets out of {len(tickets)} checked")
+        if new_tickets:
+            ids = [t.get("id") for t in new_tickets[:5]]
+            print(f"New ticket IDs: {ids}")
+        
         return new_tickets
 
 
