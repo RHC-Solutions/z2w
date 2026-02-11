@@ -1,6 +1,6 @@
 apscheduler==3.10.4
 boto3==1.34.0
-cryptography==44.0.1
+cryptography==46.0.5
 flask==3.0.0
 msal==1.28.0
 Pillow==12.0.0  
