@@ -6,7 +6,7 @@
 {% block full_content %}
 {% if explorer_built %}
 <iframe
-  src="{{ url_for('static', filename='explorer/index.html') }}"
+  src="{{ url_for('explorer_static') }}"
   class="explorer-frame"
   style="flex:1;width:100%;border:none;height:calc(100vh - 52px)"
   title="Zendesk Explorer"
