@@ -846,11 +846,10 @@ def storage_report():
         scan_pct = round(snap_scanned / cache_total * 100, 1) if cache_total else 0
 
         # ── Offloaded stats ─────────────────────────
-        offloaded_bytes = db.query(
-            sqlfunc.sum(ProcessedTicket.wasabi_files_size)
-        ).scalar() or 0
         offloaded_tickets = db.query(ProcessedTicket).filter(
-            ProcessedTicket.wasabi_files_size > 0
+            ProcessedTicket.wasabi_files.isnot(None),
+            ProcessedTicket.wasabi_files != '',
+            ProcessedTicket.wasabi_files != '[]',
         ).count()
         tickets_with_files = db.query(ProcessedTicket).filter(
             ProcessedTicket.attachments_count > 0
@@ -902,7 +901,7 @@ def storage_report():
             scan_scanned=snap_scanned,
             scan_total=cache_total,
             scan_pct=scan_pct,
-            offloaded_bytes=int(offloaded_bytes),
+            offloaded_bytes=int(wasabi_stats['total_bytes']) if wasabi_stats and wasabi_stats.get('total_bytes') else 0,
             offloaded_tickets=offloaded_tickets,
             tickets_with_files=tickets_with_files,
             plan_limit_gb=plan_limit_gb,
@@ -971,11 +970,10 @@ def storage_report_json():
         is_empty = (snap_scanned == 0)
 
         # Offloaded stats from ProcessedTicket
-        offloaded_bytes = db.query(
-            sqlfunc.sum(ProcessedTicket.wasabi_files_size)
-        ).scalar() or 0
         offloaded_tickets = db.query(ProcessedTicket).filter(
-            ProcessedTicket.wasabi_files_size > 0
+            ProcessedTicket.wasabi_files.isnot(None),
+            ProcessedTicket.wasabi_files != '',
+            ProcessedTicket.wasabi_files != '[]',
         ).count()
         tickets_with_files = db.query(ProcessedTicket).filter(
             ProcessedTicket.attachments_count > 0
@@ -989,6 +987,26 @@ def storage_report_json():
                 plan_limit_gb = float(limit_row.value)
             except (ValueError, TypeError):
                 pass
+
+        # Wasabi total bytes = real offloaded amount
+        offloaded_bytes = 0
+        try:
+            from config import (WASABI_ENDPOINT, WASABI_ACCESS_KEY,
+                                WASABI_SECRET_KEY, WASABI_BUCKET_NAME)
+            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
+            w_ep = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
+            w_ak = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+            w_sk = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+            w_bk = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+            if all([w_ep, w_ak, w_sk, w_bk]):
+                if not w_ep.startswith('http'):
+                    w_ep = f'https://{w_ep}'
+                wc = WasabiClient(endpoint=w_ep, access_key=w_ak,
+                                  secret_key=w_sk, bucket_name=w_bk)
+                ws = wc.get_storage_stats()
+                offloaded_bytes = ws.get('total_bytes', 0) or 0
+        except Exception:
+            pass
 
         return jsonify({
             'rows': [{

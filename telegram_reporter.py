@@ -199,12 +199,12 @@ class TelegramReporter:
                 freed_str = f"{freed_mb:.1f} MB"
             else:
                 freed_str = f"{zs.get('offloaded_bytes', 0):,} bytes"
-            tickets_tracked = zs.get('tickets_with_sizes', 0)
+            offloaded_tkts = zs.get('offloaded_tickets', 0)
             tickets_total = zs.get('tickets_with_files', 0)
             message += f"\n📁 <b>Zendesk Storage Freed:</b>\n"
             message += f"• Offloaded to Wasabi: {freed_str}\n"
-            message += f"• Tickets tracked: {tickets_tracked:,}"
-            if tickets_total > tickets_tracked:
+            message += f"• Tickets offloaded: {offloaded_tkts:,}"
+            if tickets_total > offloaded_tkts:
                 message += f" / {tickets_total:,} with files"
             message += "\n"
         elif zs.get('error'):

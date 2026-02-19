@@ -498,14 +498,24 @@ class AttachmentOffloader:
         from sqlalchemy import func as sql_func
         db = get_db()
         try:
-            # Total bytes offloaded (only rows where we tracked sizes, i.e. wasabi_files_size > 0)
-            offloaded_bytes = db.query(
-                sql_func.sum(ProcessedTicket.wasabi_files_size)
-            ).scalar() or 0
+            # Real offloaded bytes from Wasabi (wasabi_files_size column is
+            # incomplete — size tracking was added after most tickets were
+            # already processed, so we use Wasabi's own total instead).
+            offloaded_bytes = 0
+            try:
+                ws = self.wasabi.get_storage_stats()
+                offloaded_bytes = ws.get('total_bytes', 0) or 0
+            except Exception:
+                # Fallback to DB column if Wasabi is unreachable
+                offloaded_bytes = db.query(
+                    sql_func.sum(ProcessedTicket.wasabi_files_size)
+                ).scalar() or 0
 
-            # Count of tickets where we have actual size data
-            tickets_with_sizes = db.query(ProcessedTicket).filter(
-                ProcessedTicket.wasabi_files_size > 0
+            # Count of tickets actually offloaded (have wasabi_files entries)
+            offloaded_tickets = db.query(ProcessedTicket).filter(
+                ProcessedTicket.wasabi_files.isnot(None),
+                ProcessedTicket.wasabi_files != '',
+                ProcessedTicket.wasabi_files != '[]',
             ).count()
 
             # Total processed tickets that had attachments
@@ -546,7 +556,7 @@ class AttachmentOffloader:
                 "offloaded_bytes": offloaded_bytes,
                 "offloaded_mb": round(offloaded_mb, 2),
                 "offloaded_gb": round(offloaded_gb, 3),
-                "tickets_with_sizes": tickets_with_sizes,
+                "offloaded_tickets": offloaded_tickets,
                 "tickets_with_files": tickets_with_files,
                 "total_processed": total_processed,
                 # Account-level storage
