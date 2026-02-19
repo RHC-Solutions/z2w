@@ -107,10 +107,10 @@
       </tr>
     </thead>
     <tbody>
-      {% for row in tickets.items %}
+      {% for row in tickets %}
       <tr>
         <td class="font-mono">
-          <a href="https://{{ zendesk_subdomain }}.zendesk.com/agent/tickets/{{ row.ticket_id }}" target="_blank" style="color:var(--primary)">#{{ row.ticket_id }}</a>
+          <a href="{{ row.ticket_url }}" target="_blank" style="color:var(--primary)">#{{ row.ticket_id }}</a>
         </td>
         <td class="truncate" style="max-width:240px" title="{{ row.subject or '' }}">{{ row.subject or '(no subject)' }}</td>
         <td>
@@ -118,15 +118,15 @@
           <span class="badge badge-{{ sc.get(row.zd_status,'secondary') }}">{{ row.zd_status or '?' }}</span>
         </td>
         <td class="text-sm text-muted">
-          {% if row.attach_count %}{{ row.attach_count }} 📎{% endif %}
-          {% if row.inline_count %}<span style="margin-left:4px">{{ row.inline_count }} 🖼️</span>{% endif %}
-          {% if not row.attach_count and not row.inline_count %}—{% endif %}
+          {% if row.attach %}{{ row.attach }} 📎{% endif %}
+          {% if row.inline %}<span style="margin-left:4px">{{ row.inline }} 🖼️</span>{% endif %}
+          {% if not row.attach and not row.inline %}—{% endif %}
         </td>
         <td class="font-semibold text-destructive text-sm">
-          {% set mb = (row.total_size or 0) / 1048576 %}
-          {% if mb >= 1000 %}{{ "%.2f"|format(mb/1024) }} GB{% elif mb >= 1 %}{{ "%.1f"|format(mb) }} MB{% else %}{{ "%.0f"|format((row.total_size or 0)/1024) }} KB{% endif %}
+          {% set mb = (row.size_bytes or 0) / 1048576 %}
+          {% if mb >= 1000 %}{{ "%.2f"|format(mb/1024) }} GB{% elif mb >= 1 %}{{ "%.1f"|format(mb) }} MB{% else %}{{ "%.0f"|format((row.size_bytes or 0)/1024) }} KB{% endif %}
         </td>
-        <td class="font-mono text-muted text-sm">{{ row.last_seen_at.strftime('%Y-%m-%d %H:%M') if row.last_seen_at else '—' }}</td>
+        <td class="font-mono text-muted text-sm">{{ row.updated_at.strftime('%Y-%m-%d %H:%M') if row.updated_at else '—' }}</td>
       </tr>
       {% else %}
       <tr><td colspan="6" class="text-muted text-center" style="padding:24px">No tickets found.</td></tr>
@@ -137,12 +137,12 @@
 
 {% set qs = ('&status=' + status_filter if status_filter else '') + ('&q=' + q|urlencode if q else '') + '&sort=' + (sort or 'total_size') + '&order=' + (order or 'desc') %}
 <nav class="pagination">
-  {% if tickets.has_prev %}<a class="page-link" href="?page={{ tickets.prev_num }}{{ qs }}">← Prev</a>{% endif %}
-  {% for pn in tickets.iter_pages() %}
-    {% if pn %}<a class="page-link {{ 'active' if pn == tickets.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
+  {% if pagination.has_prev %}<a class="page-link" href="?page={{ pagination.prev_num }}{{ qs }}">← Prev</a>{% endif %}
+  {% for pn in pagination.iter_pages() %}
+    {% if pn %}<a class="page-link {{ 'active' if pn == pagination.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
     {% else %}<span class="page-link disabled">…</span>{% endif %}
   {% endfor %}
-  {% if tickets.has_next %}<a class="page-link" href="?page={{ tickets.next_num }}{{ qs }}">Next →</a>{% endif %}
+  {% if pagination.has_next %}<a class="page-link" href="?page={{ pagination.next_num }}{{ qs }}">Next →</a>{% endif %}
 </nav>
 {% endif %}
 

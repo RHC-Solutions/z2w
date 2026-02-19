@@ -746,10 +746,14 @@ def storage_report():
         subdomain = (subdomain_row.value if subdomain_row else None) or ZENDESK_SUBDOMAIN or 'app'
 
         sort_map = {
-            'ticket_id': ZendeskStorageSnapshot.ticket_id,
-            'size':      ZendeskStorageSnapshot.total_size,
-            'files':     ZendeskStorageSnapshot.attach_count,
-            'updated':   ZendeskStorageSnapshot.updated_at,
+            'ticket_id':   ZendeskStorageSnapshot.ticket_id,
+            'size':        ZendeskStorageSnapshot.total_size,
+            'total_size':  ZendeskStorageSnapshot.total_size,
+            'files':       ZendeskStorageSnapshot.attach_count,
+            'updated':     ZendeskStorageSnapshot.updated_at,
+            'last_seen_at': ZendeskStorageSnapshot.updated_at,
+            'subject':     ZendeskStorageSnapshot.subject,
+            'zd_status':   ZendeskStorageSnapshot.zd_status,
         }
         sort_col = sort_map.get(sort_by, ZendeskStorageSnapshot.total_size)
         order_fn = desc if sort_order == 'desc' else asc
