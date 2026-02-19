@@ -98,11 +98,11 @@
     <div class="stat-sub">{{ "{:,}".format(total_files or 0) }} files · {{ "{:,}".format(total_tickets) }} tickets</div>
   </div>
 
-  {# Offloaded to Wasabi #}
+  {# Freed from Zendesk (offloaded) #}
   <div class="stat-card success">
     <div class="stat-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
-      Offloaded to Wasabi
+      Freed from Zendesk
     </div>
     {% set off_gb = (offloaded_bytes or 0) / 1073741824 %}
     {% if off_gb >= 1 %}
@@ -111,24 +111,6 @@
     <div class="stat-value">{{ "%.0f"|format((offloaded_bytes or 0) / 1048576) }} MB</div>
     {% endif %}
     <div class="stat-sub">{{ "{:,}".format(offloaded_tickets) }} of {{ "{:,}".format(tickets_with_files) }} tickets with files</div>
-  </div>
-
-  {# Wasabi total storage #}
-  <div class="stat-card primary">
-    <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
-      Wasabi Total
-    </div>
-    {% if wasabi_stats %}
-      {% if wasabi_stats.total_gb >= 1 %}
-      <div class="stat-value">{{ "%.2f"|format(wasabi_stats.total_gb) }} GB</div>
-      {% else %}
-      <div class="stat-value">{{ "%.1f"|format(wasabi_stats.total_mb or 0) }} MB</div>
-      {% endif %}
-      <div class="stat-sub">{{ "{:,}".format(wasabi_stats.object_count) }} objects</div>
-    {% else %}
-      <div class="text-muted" style="font-size:13px;margin-top:4px">Unavailable</div>
-    {% endif %}
   </div>
 </div>
 

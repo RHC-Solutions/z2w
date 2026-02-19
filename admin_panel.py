@@ -855,6 +855,25 @@ def storage_report():
             ProcessedTicket.attachments_count > 0
         ).count()
 
+        # Real offloaded bytes from Wasabi
+        offloaded_bytes = 0
+        try:
+            from config import WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
+            w_ep = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
+            w_ak = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+            w_sk = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+            w_bk = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+            if all([w_ep, w_ak, w_sk, w_bk]):
+                if not w_ep.startswith('http'):
+                    w_ep = f'https://{w_ep}'
+                wc = WasabiClient(endpoint=w_ep, access_key=w_ak,
+                                  secret_key=w_sk, bucket_name=w_bk)
+                ws = wc.get_storage_stats()
+                offloaded_bytes = ws.get('total_bytes', 0) or 0
+        except Exception:
+            pass
+
         # ── Plan limit from settings ────────────────
         limit_row = db.query(Setting).filter_by(key='ZENDESK_STORAGE_LIMIT_GB').first()
         plan_limit_gb = 0.0
@@ -863,24 +882,6 @@ def storage_report():
                 plan_limit_gb = float(limit_row.value)
             except (ValueError, TypeError):
                 pass
-
-        # ── Wasabi stats ────────────────────────────
-        wasabi_stats = None
-        try:
-            from config import WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
-            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
-            w_endpoint = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
-            w_access = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
-            w_secret = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
-            w_bucket = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
-            if all([w_endpoint, w_access, w_secret, w_bucket]):
-                if not w_endpoint.startswith('http'):
-                    w_endpoint = f'https://{w_endpoint}'
-                wc = WasabiClient(endpoint=w_endpoint, access_key=w_access,
-                                  secret_key=w_secret, bucket_name=w_bucket)
-                wasabi_stats = wc.get_storage_stats()
-        except Exception:
-            pass
 
         return render_template(
             'storage.html',
@@ -901,11 +902,10 @@ def storage_report():
             scan_scanned=snap_scanned,
             scan_total=cache_total,
             scan_pct=scan_pct,
-            offloaded_bytes=int(wasabi_stats['total_bytes']) if wasabi_stats and wasabi_stats.get('total_bytes') else 0,
+            offloaded_bytes=int(offloaded_bytes),
             offloaded_tickets=offloaded_tickets,
             tickets_with_files=tickets_with_files,
             plan_limit_gb=plan_limit_gb,
-            wasabi_stats=wasabi_stats,
         )
     finally:
         db.close()

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Cloud, Database, AlertTriangle, ArrowDownToLine, HardDrive } from "lucide-react";
+import { RefreshCw, Database, AlertTriangle, ArrowDownToLine, HardDrive } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,13 +51,6 @@ interface StorageReport {
   is_empty: boolean;
 }
 
-interface WasabiStats {
-  object_count: number;
-  total_bytes: number;
-  total_gb: number;
-  total_mb: number;
-}
-
 interface Props {
   creds: StoredCreds | null;
 }
@@ -71,7 +64,6 @@ const STATUS_BADGE: Record<string, string> = {
 
 export function StoragePanel({ creds }: Props) {
   const [report, setReport] = useState<StorageReport | null>(null);
-  const [wasabi, setWasabi] = useState<WasabiStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +73,7 @@ export function StoragePanel({ creds }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const data = await z2wFetch("/api/storage_report") as StorageReport;
+      const data = (await z2wFetch("/api/storage_report")) as StorageReport;
       setReport(data);
     } catch (e) {
       setError(String(e));
@@ -90,17 +82,9 @@ export function StoragePanel({ creds }: Props) {
     }
   }, []);
 
-  const loadWasabi = useCallback(async () => {
-    try {
-      const data = await z2wFetch("/api/wasabi_stats") as WasabiStats;
-      setWasabi(data);
-    } catch { /* ignore */ }
-  }, []);
-
   useEffect(() => {
     loadReport();
-    loadWasabi();
-  }, [loadReport, loadWasabi]);
+  }, [loadReport]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -108,19 +92,28 @@ export function StoragePanel({ creds }: Props) {
       await z2wFetch("/api/storage_report/refresh", { method: "POST" });
       await new Promise((r) => setTimeout(r, 3000));
       await loadReport();
-    } catch { /* ignore */ } finally {
+    } catch {
+      /* ignore */
+    } finally {
       setRefreshing(false);
     }
   };
 
-  const filteredRows = report?.rows.filter((r) => activeTab === "all" || r.zd_status === activeTab) ?? [];
+  const filteredRows =
+    report?.rows.filter(
+      (r) => activeTab === "all" || r.zd_status === activeTab,
+    ) ?? [];
   const statusTabs = ["all", "open", "pending", "solved", "closed"];
 
   // Compute plan usage
   const planLimitBytes = (report?.plan_limit_gb ?? 0) * 1024 * 1024 * 1024;
   const zdUsedBytes = report?.summary.total_bytes ?? 0;
-  const planPct = planLimitBytes > 0 ? Math.min(zdUsedBytes / planLimitBytes * 100, 100) : 0;
-  const remainingBytes = planLimitBytes > 0 ? Math.max(planLimitBytes - zdUsedBytes, 0) : 0;
+  const planPct =
+    planLimitBytes > 0
+      ? Math.min((zdUsedBytes / planLimitBytes) * 100, 100)
+      : 0;
+  const remainingBytes =
+    planLimitBytes > 0 ? Math.max(planLimitBytes - zdUsedBytes, 0) : 0;
 
   return (
     <div className="space-y-4">
@@ -139,25 +132,28 @@ export function StoragePanel({ creds }: Props) {
                   />
                 </div>
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  {report.scan.scanned.toLocaleString()} / {report.scan.total.toLocaleString()} tickets ({report.scan.pct}%)
+                  {report.scan.scanned.toLocaleString()} /{" "}
+                  {report.scan.total.toLocaleString()} tickets (
+                  {report.scan.pct}%)
                 </span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Sizes below reflect only scanned tickets. Full data available once the scan completes.
+                Sizes below reflect only scanned tickets. Full data available
+                once the scan completes.
               </p>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* Summary cards — Zendesk focused */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* Zendesk plan storage */}
         {report && report.plan_limit_gb > 0 ? (
           <Card>
             <CardHeader className="pb-1 pt-3 px-4">
               <CardDescription className="text-xs flex items-center gap-1">
-                <HardDrive className="h-3 w-3" /> Zendesk plan
+                <HardDrive className="h-3 w-3" /> Zendesk Plan
               </CardDescription>
             </CardHeader>
             <CardContent className="px-4 pb-3">
@@ -169,7 +165,9 @@ export function StoragePanel({ creds }: Props) {
                     style={{ width: `${planPct}%` }}
                   />
                 </div>
-                <span className="text-xs text-muted-foreground">{planPct.toFixed(1)}%</span>
+                <span className="text-xs text-muted-foreground">
+                  {planPct.toFixed(1)}%
+                </span>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {formatBytes(remainingBytes)} remaining
@@ -180,13 +178,20 @@ export function StoragePanel({ creds }: Props) {
           <Card>
             <CardHeader className="pb-1 pt-3 px-4">
               <CardDescription className="text-xs flex items-center gap-1">
-                <HardDrive className="h-3 w-3" /> Zendesk plan
+                <HardDrive className="h-3 w-3" /> Zendesk Plan
               </CardDescription>
             </CardHeader>
             <CardContent className="px-4 pb-3">
               <p className="text-sm text-muted-foreground">Not configured</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Set in <a href="/settings" target="_top" className="text-primary underline">Settings</a>
+                Set in{" "}
+                <a
+                  href="/settings"
+                  target="_top"
+                  className="text-primary underline"
+                >
+                  Settings
+                </a>
               </p>
             </CardContent>
           </Card>
@@ -195,51 +200,65 @@ export function StoragePanel({ creds }: Props) {
         {/* Zendesk storage still in use */}
         <Card>
           <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs flex items-center gap-1"><Database className="h-3 w-3" /> Still in Zendesk</CardDescription>
+            <CardDescription className="text-xs flex items-center gap-1">
+              <Database className="h-3 w-3" /> Still in Zendesk
+            </CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-3">
-            <p className="text-xl font-bold text-destructive">{report ? formatBytes(report.summary.total_bytes) : "–"}</p>
+            <p className="text-xl font-bold text-destructive">
+              {report ? formatBytes(report.summary.total_bytes) : "–"}
+            </p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {report?.summary.total_files ?? "–"} files · {report?.summary.total_tickets ?? "–"} tickets
+              {report?.summary.total_files ?? "–"} files ·{" "}
+              {report?.summary.total_tickets ?? "–"} tickets
             </p>
           </CardContent>
         </Card>
 
-        {/* Offloaded to Wasabi (freed from Zendesk) */}
+        {/* Freed from Zendesk */}
         <Card>
           <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs flex items-center gap-1"><ArrowDownToLine className="h-3 w-3" /> Offloaded to Wasabi</CardDescription>
+            <CardDescription className="text-xs flex items-center gap-1">
+              <ArrowDownToLine className="h-3 w-3" /> Freed from Zendesk
+            </CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-3">
             <p className="text-xl font-bold text-green-600">
               {report ? formatBytes(report.offloaded.bytes) : "–"}
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {report?.offloaded.tickets ?? "–"} of {report?.offloaded.tickets_with_files.toLocaleString() ?? "–"} tickets with files
+              {report?.offloaded.tickets.toLocaleString() ?? "–"} of{" "}
+              {report?.offloaded.tickets_with_files.toLocaleString() ?? "–"}{" "}
+              tickets with files
             </p>
-          </CardContent>
-        </Card>
-
-        {/* Wasabi total storage */}
-        <Card>
-          <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs flex items-center gap-1"><Cloud className="h-3 w-3" /> Wasabi total</CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 pb-3">
-            <p className="text-xl font-bold text-primary">
-              {wasabi ? (wasabi.total_gb >= 1 ? `${wasabi.total_gb.toFixed(2)} GB` : `${wasabi.total_mb?.toFixed(1)} MB`) : "–"}
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">{wasabi?.object_count?.toLocaleString() ?? "–"} objects</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Last scanned / Next scan row */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
-        <span>Last scanned: <b className="text-foreground">{report?.last_updated ? formatDate(report.last_updated) : "–"}</b></span>
-        <span>Next scan: <b className="text-foreground">{report?.next_run ? formatDate(report.next_run) : "–"}</b></span>
-        <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 ml-auto" onClick={handleRefresh} disabled={refreshing}>
-          <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
+        <span>
+          Last scanned:{" "}
+          <b className="text-foreground">
+            {report?.last_updated ? formatDate(report.last_updated) : "–"}
+          </b>
+        </span>
+        <span>
+          Next scan:{" "}
+          <b className="text-foreground">
+            {report?.next_run ? formatDate(report.next_run) : "–"}
+          </b>
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 text-xs px-2 gap-1 ml-auto"
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`}
+          />
           {refreshing ? "Scanning…" : "Scan Now"}
         </Button>
       </div>
@@ -255,7 +274,8 @@ export function StoragePanel({ creds }: Props) {
       {report?.is_empty && (
         <Card>
           <CardContent className="pt-6 text-sm text-muted-foreground">
-            Storage scan has not started yet. Click <b>Scan Now</b> to begin, or wait for the next scheduled run.
+            Storage scan has not started yet. Click <b>Scan Now</b> to begin,
+            or wait for the next scheduled run.
           </CardContent>
         </Card>
       )}
@@ -265,11 +285,29 @@ export function StoragePanel({ creds }: Props) {
           <div className="flex items-center justify-between mb-2">
             <TabsList className="h-8">
               {statusTabs.map((s) => {
-                const stat = s === "all" ? report.summary : report.summary.by_status[s];
-                const count = s === "all" ? report.summary.total_tickets : (stat as { tickets: number })?.tickets ?? 0;
+                const stat =
+                  s === "all"
+                    ? report.summary
+                    : report.summary.by_status[s];
+                const count =
+                  s === "all"
+                    ? report.summary.total_tickets
+                    : (stat as { tickets: number })?.tickets ?? 0;
                 return (
-                  <TabsTrigger key={s} value={s} className="text-xs h-7 capitalize px-2">
-                    {s} {count > 0 && <Badge variant="secondary" className="ml-1 px-1 py-0 text-xs h-4">{count}</Badge>}
+                  <TabsTrigger
+                    key={s}
+                    value={s}
+                    className="text-xs h-7 capitalize px-2"
+                  >
+                    {s}{" "}
+                    {count > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="ml-1 px-1 py-0 text-xs h-4"
+                      >
+                        {count}
+                      </Badge>
+                    )}
                   </TabsTrigger>
                 );
               })}
@@ -286,43 +324,82 @@ export function StoragePanel({ creds }: Props) {
                       <TableHead>Subject</TableHead>
                       <TableHead className="w-24">Status</TableHead>
                       <TableHead className="w-20">Files</TableHead>
-                      <TableHead className="w-28">Size in ZD</TableHead>
+                      <TableHead className="w-28">Size</TableHead>
                       <TableHead className="w-32">Last scanned</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loading && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className="text-center text-muted-foreground py-8"
+                        >
+                          Loading…
+                        </TableCell>
+                      </TableRow>
                     )}
                     {!loading && filteredRows.length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No tickets with attachments</TableCell></TableRow>
-                    )}
-                    {!loading && filteredRows.slice(0, 200).map((row) => (
-                      <TableRow key={row.ticket_id} className="text-sm">
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          <a href={`https://${creds?.subdomain ?? ""}.zendesk.com/agent/tickets/${row.ticket_id}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                            #{row.ticket_id}
-                          </a>
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className="text-center text-muted-foreground py-8"
+                        >
+                          No tickets with attachments
                         </TableCell>
-                        <TableCell className="max-w-xs truncate">{row.subject || "(no subject)"}</TableCell>
-                        <TableCell>
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_BADGE[row.zd_status] || "bg-gray-100 text-gray-700"}`}>
-                            {row.zd_status}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {row.attach_count > 0 && <span>{row.attach_count} 📎</span>}
-                          {row.inline_count > 0 && <span className="ml-1">{row.inline_count} 🖼️</span>}
-                          {row.attach_count === 0 && row.inline_count === 0 && "—"}
-                        </TableCell>
-                        <TableCell className="text-xs font-medium text-destructive">{formatBytes(row.total_size)}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{formatDate(row.last_seen_at)}</TableCell>
                       </TableRow>
-                    ))}
+                    )}
+                    {!loading &&
+                      filteredRows.slice(0, 200).map((row) => (
+                        <TableRow key={row.ticket_id} className="text-sm">
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            <a
+                              href={`https://${creds?.subdomain ?? ""}.zendesk.com/agent/tickets/${row.ticket_id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline"
+                            >
+                              #{row.ticket_id}
+                            </a>
+                          </TableCell>
+                          <TableCell className="max-w-xs truncate">
+                            {row.subject || "(no subject)"}
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_BADGE[row.zd_status] || "bg-gray-100 text-gray-700"}`}
+                            >
+                              {row.zd_status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {row.attach_count > 0 && (
+                              <span>{row.attach_count} 📎</span>
+                            )}
+                            {row.inline_count > 0 && (
+                              <span className="ml-1">
+                                {row.inline_count} 🖼️
+                              </span>
+                            )}
+                            {row.attach_count === 0 &&
+                              row.inline_count === 0 &&
+                              "—"}
+                          </TableCell>
+                          <TableCell className="text-xs font-medium text-destructive">
+                            {formatBytes(row.total_size)}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {formatDate(row.last_seen_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
                 {filteredRows.length > 200 && (
-                  <p className="text-xs text-muted-foreground px-4 py-2">Showing top 200 of {filteredRows.length.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground px-4 py-2">
+                    Showing top 200 of{" "}
+                    {filteredRows.length.toLocaleString()}
+                  </p>
                 )}
               </Card>
             </TabsContent>
