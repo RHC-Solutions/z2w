@@ -969,6 +969,37 @@ def wasabi_stats_json():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/explorer/settings')
+@login_required
+def explorer_settings_api():
+    """Return Zendesk credentials from the z2w database for the Explorer app.
+    The Explorer React app calls this on mount so users don't have to
+    re-enter credentials that are already saved in z2w Settings."""
+    db = get_db()
+    try:
+        from config import reload_config, ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
+        reload_config()
+        settings_dict = {}
+        for s in db.query(Setting).all():
+            settings_dict[s.key] = s.value or ''
+
+        subdomain = (settings_dict.get('ZENDESK_SUBDOMAIN') or ZENDESK_SUBDOMAIN or '').strip()
+        email     = (settings_dict.get('ZENDESK_EMAIL')     or ZENDESK_EMAIL     or '').strip()
+        token     = (settings_dict.get('ZENDESK_API_TOKEN') or ZENDESK_API_TOKEN or '').strip()
+
+        # Clean subdomain: strip URL parts if someone pasted the full URL
+        subdomain = subdomain.replace('https://', '').replace('http://', '').replace('.zendesk.com', '').split('.')[0]
+
+        return jsonify({
+            'subdomain': subdomain,
+            'email': email,
+            'token': token,
+            'configured': bool(subdomain and token),
+        })
+    finally:
+        db.close()
+
+
 @app.route('/explorer/')
 @login_required
 def explorer_app(subpath=''):

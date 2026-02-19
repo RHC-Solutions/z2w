@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Save, Eye, EyeOff, Trash2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,14 +12,24 @@ import { clearCreds } from "@/lib/storage";
 interface Props {
   creds: StoredCreds | null;
   onSave: (creds: StoredCreds) => void;
+  fromServer?: boolean;
 }
 
-export function SettingsPanel({ creds, onSave }: Props) {
+export function SettingsPanel({ creds, onSave, fromServer }: Props) {
   const [subdomain, setSubdomain] = useState(creds?.subdomain ?? "");
   const [email, setEmail] = useState(creds?.email ?? "");
   const [token, setToken] = useState(creds?.token ?? "");
   const [showToken, setShowToken] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Sync form fields when creds change (e.g. server fetch arrives)
+  useEffect(() => {
+    if (creds) {
+      setSubdomain(creds.subdomain ?? "");
+      setEmail(creds.email ?? "");
+      setToken(creds.token ?? "");
+    }
+  }, [creds]);
 
   const handleSave = () => {
     const s = subdomain.trim().replace(/^https?:\/\//, "").replace(/\.zendesk\.com$/i, "").split(".")[0];
@@ -37,11 +47,27 @@ export function SettingsPanel({ creds, onSave }: Props) {
 
   return (
     <div className="max-w-lg space-y-4">
+      {fromServer && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardContent className="flex items-center gap-3 py-3">
+            <span className="text-lg">✓</span>
+            <div className="text-sm">
+              <p className="font-medium">Auto-configured from z2w Settings</p>
+              <p className="text-muted-foreground text-xs">
+                Credentials are synced from <a href="/settings" target="_top" className="text-primary underline">z2w Settings</a>. Changes made there will apply here automatically.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Zendesk API credentials</CardTitle>
           <CardDescription>
-            Credentials are stored only in your browser (localStorage). They are never sent to the z2w server.
+            {fromServer
+              ? "These values are read from z2w Settings. To change them, go to the Settings page."
+              : "Credentials are stored only in your browser (localStorage). They are never sent to the z2w server."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -51,6 +77,8 @@ export function SettingsPanel({ creds, onSave }: Props) {
               placeholder="yourcompany (from yourcompany.zendesk.com)"
               value={subdomain}
               onChange={(e) => setSubdomain(e.target.value)}
+              readOnly={fromServer}
+              className={fromServer ? "bg-muted" : ""}
             />
           </div>
           <div className="space-y-1.5">
@@ -60,6 +88,8 @@ export function SettingsPanel({ creds, onSave }: Props) {
               placeholder="you@company.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              readOnly={fromServer}
+              className={fromServer ? "bg-muted" : ""}
             />
           </div>
           <div className="space-y-1.5">
@@ -70,7 +100,8 @@ export function SettingsPanel({ creds, onSave }: Props) {
                 placeholder="Your Zendesk API token"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                className="pr-10"
+                readOnly={fromServer}
+                className={`pr-10 ${fromServer ? "bg-muted" : ""}`}
               />
               <button
                 type="button"
@@ -81,18 +112,25 @@ export function SettingsPanel({ creds, onSave }: Props) {
               </button>
             </div>
           </div>
-          <div className="flex gap-2 pt-1">
-            <Button onClick={handleSave} size="sm" className="gap-1.5">
-              <Save className="h-3.5 w-3.5" />
-              {saved ? "Saved!" : "Save"}
-            </Button>
-            {creds && (
-              <Button variant="destructive" size="sm" onClick={handleClear} className="gap-1.5">
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear
+          {!fromServer && (
+            <div className="flex gap-2 pt-1">
+              <Button onClick={handleSave} size="sm" className="gap-1.5">
+                <Save className="h-3.5 w-3.5" />
+                {saved ? "Saved!" : "Save"}
               </Button>
-            )}
-          </div>
+              {creds && (
+                <Button variant="destructive" size="sm" onClick={handleClear} className="gap-1.5">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Clear
+                </Button>
+              )}
+            </div>
+          )}
+          {fromServer && (
+            <p className="text-xs text-muted-foreground pt-1">
+              To change credentials, go to <a href="/settings" target="_top" className="text-primary underline">z2w Settings</a>.
+            </p>
+          )}
         </CardContent>
       </Card>
 

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Ticket, Paperclip, HardDrive, Settings } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { loadCreds, saveCreds, type StoredCreds } from "@/lib/storage";
+import { loadCreds, saveCreds, fetchServerCreds, type StoredCreds } from "@/lib/storage";
 
 import { TicketsPanel } from "./panels/TicketsPanel";
 import { FilesPanel } from "./panels/FilesPanel";
@@ -24,8 +24,25 @@ export function ExplorerShell() {
   const [active, setActive] = useState<PanelId>("tickets");
   const [creds, setCreds] = useState<StoredCreds | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [fromServer, setFromServer] = useState(false);
 
-  useEffect(() => { setMounted(true); setCreds(loadCreds()); }, []);
+  useEffect(() => {
+    setMounted(true);
+    const local = loadCreds();
+    if (local?.subdomain && local?.token) {
+      setCreds(local);
+    }
+    // Always sync from server settings — they take priority
+    fetchServerCreds().then((server) => {
+      if (server) {
+        saveCreds(server);
+        setCreds(server);
+        setFromServer(true);
+      } else if (local?.subdomain && local?.token) {
+        setCreds(local);
+      }
+    });
+  }, []);
 
   const handleSave = useCallback((c: StoredCreds) => { saveCreds(c); setCreds(c); }, []);
   const connected = Boolean(creds?.subdomain && creds?.token);
@@ -67,7 +84,7 @@ export function ExplorerShell() {
         {active === "tickets" && <TicketsPanel creds={creds} />}
         {active === "files"   && <FilesPanel   creds={creds} />}
         {active === "storage" && <StoragePanel creds={creds} />}
-        {active === "settings" && <SettingsPanel creds={creds} onSave={handleSave} />}
+        {active === "settings" && <SettingsPanel creds={creds} onSave={handleSave} fromServer={fromServer} />}
       </div>
     </div>
   );
