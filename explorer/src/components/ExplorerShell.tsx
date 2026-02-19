@@ -1,21 +1,19 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Ticket, Paperclip, HardDrive } from "lucide-react";
+import { Ticket, Paperclip } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { loadCreds, saveCreds, fetchServerCreds, type StoredCreds } from "@/lib/storage";
 
 import { TicketsPanel } from "./panels/TicketsPanel";
 import { FilesPanel } from "./panels/FilesPanel";
-import { StoragePanel } from "./panels/StoragePanel";
 
-type PanelId = "tickets" | "files" | "storage";
+type PanelId = "tickets" | "files";
 
 const NAV: { id: PanelId; label: string; icon: React.ElementType }[] = [
   { id: "tickets",  label: "Tickets",            icon: Ticket   },
   { id: "files",    label: "Files & Attachments", icon: Paperclip },
-  { id: "storage",  label: "Storage Overview",   icon: HardDrive },
 ];
 
 export function ExplorerShell() {
@@ -78,7 +76,6 @@ export function ExplorerShell() {
       <div className="flex-1 overflow-auto p-4">
         {active === "tickets" && <TicketsPanel creds={creds} />}
         {active === "files"   && <FilesPanel   creds={creds} />}
-        {active === "storage" && <StoragePanel creds={creds} />}
       </div>
     </div>
   );
