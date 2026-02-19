@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from config import DATABASE_PATH
 
 Base = declarative_base()
@@ -80,20 +81,29 @@ class Setting(Base):
     description = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# Database setup — use WAL mode to allow concurrent readers + writer without lock errors
+# Database setup
+# NullPool: every Session gets its own connection that is immediately closed when
+# the session closes — no pooled connections sitting idle and holding read locks
+# while the scheduler thread tries to write.
 from sqlalchemy import event as _sa_event
 
 engine = create_engine(
     f'sqlite:///{DATABASE_PATH}',
     echo=False,
+    poolclass=NullPool,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
 
 @_sa_event.listens_for(engine, "connect")
-def _set_wal_mode(dbapi_connection, connection_record):
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
+    # WAL mode: readers never block writers, writers never block readers
     cursor.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout: retry locked writes for up to 15 s before raising OperationalError
+    cursor.execute("PRAGMA busy_timeout=15000")
     cursor.execute("PRAGMA synchronous=NORMAL")
+    # Keep WAL file small; checkpoint after every 200 pages
+    cursor.execute("PRAGMA wal_autocheckpoint=200")
     cursor.close()
 
 SessionLocal = sessionmaker(bind=engine)
