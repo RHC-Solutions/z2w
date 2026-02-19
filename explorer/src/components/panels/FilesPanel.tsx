@@ -128,7 +128,9 @@ export function FilesPanel({ creds }: Props) {
         if (hasMore && nextLink) {
           try {
             const u = new URL(nextLink);
-            pageUrl = u.pathname + u.search;
+            // Strip /api/v2 prefix — the proxy re-adds it
+            const raw = u.pathname + u.search;
+            pageUrl = raw.replace(/^\/api\/v2/, "");
           } catch { pageUrl = null; }
         } else {
           pageUrl = null;
