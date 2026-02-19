@@ -20,6 +20,7 @@
       <div class="form-group"><label class="form-label">Subdomain</label><input type="text" class="form-control" name="ZENDESK_SUBDOMAIN" value="{{ settings.get('ZENDESK_SUBDOMAIN','') }}" placeholder="yourcompany"></div>
       <div class="form-group"><label class="form-label">Email</label><input type="email" class="form-control" name="ZENDESK_EMAIL" value="{{ settings.get('ZENDESK_EMAIL','') }}"></div>
       <div class="form-group"><label class="form-label">API Token</label><input type="password" class="form-control" name="ZENDESK_API_TOKEN" value="{{ settings.get('ZENDESK_API_TOKEN','') }}"></div>
+      <div class="form-group"><label class="form-label">File Storage Limit (GB)</label><input type="number" step="0.1" class="form-control" name="ZENDESK_STORAGE_LIMIT_GB" value="{{ settings.get('ZENDESK_STORAGE_LIMIT_GB','') }}" placeholder="e.g. 130"><small style="color:var(--muted-foreground)">From Zendesk Admin → Account → File Storage. Used in reports.</small></div>
       <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('zendesk')">Test Connection</button>
       <div id="zendesk-test-result" class="mt-2 text-sm"></div>
     </div>

@@ -7,7 +7,7 @@ import json
 import logging
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from database import get_db, ProcessedTicket, OffloadLog, ZendeskTicketCache, upsert_processed_ticket
+from database import get_db, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot, Setting
 from sqlalchemy.exc import IntegrityError
 
 # Get logger
@@ -491,9 +491,9 @@ class AttachmentOffloader:
         Compute Zendesk-side storage statistics from the local database.
 
         Returns how many bytes we have offloaded to Wasabi (= freed from Zendesk)
-        and how many tickets/files that covers.  Because Zendesk exposes no
-        "total storage used" API endpoint, we derive what we can from our own
-        records.
+        and how many tickets/files that covers.  Also includes account-level
+        storage info derived from the zendesk_storage_snapshot table and the
+        user-configured ZENDESK_STORAGE_LIMIT_GB setting.
         """
         from sqlalchemy import func as sql_func
         db = get_db()
@@ -519,6 +519,29 @@ class AttachmentOffloader:
             offloaded_mb = offloaded_bytes / (1024 * 1024)
             offloaded_gb = offloaded_bytes / (1024 * 1024 * 1024)
 
+            # ── Account-level storage: current Zendesk attachment footprint ──
+            # Sum of total_size from the storage snapshot (files still in Zendesk)
+            zd_used_bytes = db.query(
+                sql_func.sum(ZendeskStorageSnapshot.total_size)
+            ).scalar() or 0
+            snap_ticket_count = db.query(ZendeskStorageSnapshot).count()
+            snap_with_files = db.query(ZendeskStorageSnapshot).filter(
+                ZendeskStorageSnapshot.total_size > 0
+            ).count()
+
+            zd_used_gb = zd_used_bytes / (1024 ** 3)
+
+            # Read the plan limit from settings (user-configured)
+            limit_row = db.query(Setting).filter_by(key='ZENDESK_STORAGE_LIMIT_GB').first()
+            plan_limit_gb = 0.0
+            if limit_row and limit_row.value:
+                try:
+                    plan_limit_gb = float(limit_row.value)
+                except (ValueError, TypeError):
+                    pass
+
+            remaining_gb = max(plan_limit_gb - zd_used_gb, 0) if plan_limit_gb > 0 else 0
+
             return {
                 "offloaded_bytes": offloaded_bytes,
                 "offloaded_mb": round(offloaded_mb, 2),
@@ -526,6 +549,13 @@ class AttachmentOffloader:
                 "tickets_with_sizes": tickets_with_sizes,
                 "tickets_with_files": tickets_with_files,
                 "total_processed": total_processed,
+                # Account-level storage
+                "zd_used_bytes": zd_used_bytes,
+                "zd_used_gb": round(zd_used_gb, 2),
+                "plan_limit_gb": plan_limit_gb,
+                "remaining_gb": round(remaining_gb, 2),
+                "snap_ticket_count": snap_ticket_count,
+                "snap_with_files": snap_with_files,
             }
         finally:
             db.close()

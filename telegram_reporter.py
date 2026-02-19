@@ -142,26 +142,6 @@ class TelegramReporter:
                 job_size_str = f"{total_job_bytes:,} bytes"
             message += f"• Job Offload Size: {job_size_str}\n"
 
-        # ── Zendesk Storage in use (from snapshot DB) ─────────────────────
-        try:
-            from database import get_db, ZendeskStorageSnapshot
-            from sqlalchemy import func as _sqlfunc
-            _db = get_db()
-            try:
-                _total = _db.query(_sqlfunc.sum(ZendeskStorageSnapshot.total_size)).scalar() or 0
-                if _total > 0:
-                    if _total >= 1024 * 1024 * 1024:
-                        _zd_size = f"{_total / (1024**3):.2f} GB"
-                    elif _total >= 1024 * 1024:
-                        _zd_size = f"{_total / (1024**2):.1f} MB"
-                    else:
-                        _zd_size = f"{_total / 1024:.1f} KB"
-                    message += f"• Zendesk Storage in use: {_zd_size}\n"
-            finally:
-                _db.close()
-        except Exception:
-            pass
-
         # ── Wasabi storage stats ──────────────────────────────────────────
         ws = summary.get('wasabi_storage') or {}
         if ws and not ws.get('error'):
@@ -178,9 +158,39 @@ class TelegramReporter:
         elif ws.get('error'):
             message += f"\n☁️ <b>Wasabi Storage:</b> ⚠️ Could not fetch ({ws['error'][:80]})\n"
 
-        # ── Zendesk storage stats (from local DB) ─────────────────────────
+        # ── Zendesk Account Storage (from snapshot + plan limit) ─────────
         zs = summary.get('zendesk_storage') or {}
         if zs and not zs.get('error'):
+            zd_used_gb = zs.get('zd_used_gb', 0)
+            plan_limit_gb = zs.get('plan_limit_gb', 0)
+            remaining_gb = zs.get('remaining_gb', 0)
+            snap_count = zs.get('snap_ticket_count', 0)
+            snap_with_files = zs.get('snap_with_files', 0)
+
+            if zd_used_gb > 0 or plan_limit_gb > 0:
+                message += f"\n📦 <b>Zendesk File Storage:</b>\n"
+                # Used
+                if zd_used_gb >= 1.0:
+                    used_str = f"{zd_used_gb:.2f} GB"
+                else:
+                    zd_used_mb = zs.get('zd_used_bytes', 0) / (1024 * 1024)
+                    used_str = f"{zd_used_mb:.1f} MB"
+                message += f"• Used: {used_str}"
+                if plan_limit_gb > 0:
+                    message += f" / {plan_limit_gb:g} GB"
+                    # Remaining
+                    message += f"\n• Remaining: {remaining_gb:.2f} GB"
+                    # Percentage bar
+                    pct = min(zd_used_gb / plan_limit_gb * 100, 100) if plan_limit_gb else 0
+                    filled = round(pct / 10)
+                    bar = '▓' * filled + '░' * (10 - filled)
+                    message += f"\n• {bar} {pct:.1f}%"
+                message += f"\n• Tickets scanned: {snap_count:,}"
+                if snap_with_files:
+                    message += f" ({snap_with_files:,} with attachments)"
+                message += "\n"
+
+            # Offloaded
             freed_gb = zs.get('offloaded_gb', 0.0)
             freed_mb = zs.get('offloaded_mb', 0.0)
             if freed_gb >= 1.0:

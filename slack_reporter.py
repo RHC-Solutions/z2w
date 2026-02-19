@@ -124,29 +124,25 @@ class SlackReporter:
                 "short": True
             })
 
-        # ── Zendesk Storage in use (from snapshot DB) ─────────────────────
-        try:
-            from database import get_db, ZendeskStorageSnapshot
-            from sqlalchemy import func as _sqlfunc
-            _db = get_db()
-            try:
-                _total = _db.query(_sqlfunc.sum(ZendeskStorageSnapshot.total_size)).scalar() or 0
-                if _total > 0:
-                    if _total >= 1024 * 1024 * 1024:
-                        _zd_size = f"{_total / (1024**3):.2f} GB"
-                    elif _total >= 1024 * 1024:
-                        _zd_size = f"{_total / (1024**2):.1f} MB"
-                    else:
-                        _zd_size = f"{_total / 1024:.1f} KB"
-                    fields.append({
-                        "title": "Zendesk Storage in use",
-                        "value": _zd_size,
-                        "short": True
-                    })
-            finally:
-                _db.close()
-        except Exception:
-            pass
+        # ── Zendesk Account Storage (from summary) ───────────────────────
+        zs = summary.get('zendesk_storage') or {}
+        if zs and not zs.get('error'):
+            zd_used_gb = zs.get('zd_used_gb', 0)
+            plan_limit_gb = zs.get('plan_limit_gb', 0)
+            if zd_used_gb > 0 or plan_limit_gb > 0:
+                if zd_used_gb >= 1.0:
+                    used_str = f"{zd_used_gb:.2f} GB"
+                else:
+                    zd_used_mb = zs.get('zd_used_bytes', 0) / (1024 * 1024)
+                    used_str = f"{zd_used_mb:.1f} MB"
+                if plan_limit_gb > 0:
+                    remaining = zs.get('remaining_gb', 0)
+                    pct = min(zd_used_gb / plan_limit_gb * 100, 100)
+                    used_str += f" / {plan_limit_gb:g} GB ({pct:.1f}%)"
+                    fields.append({"title": "Zendesk File Storage", "value": used_str, "short": True})
+                    fields.append({"title": "Remaining", "value": f"{remaining:.2f} GB", "short": True})
+                else:
+                    fields.append({"title": "Zendesk File Storage", "value": used_str, "short": True})
 
         
         # Build attachment
