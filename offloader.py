@@ -457,25 +457,49 @@ class AttachmentOffloader:
                             else:
                                 logger.warning(f"[Ticket {ticket_id}] ✗ Failed to replace/delete inline image {filename} in Zendesk")
                                 result["errors"].append(f"Failed to replace/delete inline image {filename} in Zendesk")
+                        elif comment_id and original_html:
+                            # Token-URL-only image (no attachment_id) — use Agent Workspace
+                            # redaction API to remove the <img> from the HTML body and free storage.
+                            redact_success = self.zendesk.redact_inline_image_agent_workspace(
+                                ticket_id=ticket_id,
+                                comment_id=comment_id,
+                                wasabi_url=wasabi_url,
+                                filename=filename,
+                                original_html=original_html
+                            )
+                            if redact_success:
+                                result["attachments_deleted"] += 1
+                                result["inlines_deleted"] += 1
+                                logger.info(f"[Ticket {ticket_id}] ✓ Redacted token-URL inline image {filename} via Agent Workspace API")
+                            else:
+                                # Fallback: just add a link comment if redaction failed
+                                logger.warning(f"[Ticket {ticket_id}] ✗ Agent Workspace redaction failed for {filename}, falling back to link comment")
+                                ticket_status = self.zendesk.get_ticket_status(ticket_id)
+                                if ticket_status != "closed":
+                                    img_src = inline_image.get("img_src", attachment_url)
+                                    self.zendesk.add_wasabi_link_comment(
+                                        ticket_id=ticket_id,
+                                        comment_id=comment_id,
+                                        wasabi_url=wasabi_url,
+                                        filename=filename,
+                                        img_src=img_src
+                                    )
+                                result["errors"].append(f"Agent Workspace redaction failed for {filename} (link comment added as fallback)")
                         elif comment_id:
-                            # Token-URL-only image (no attachment_id) — add link comment on non-closed tickets
+                            # No original_html available — cannot redact, just add link comment
                             ticket_status = self.zendesk.get_ticket_status(ticket_id)
                             if ticket_status != "closed":
                                 img_src = inline_image.get("img_src", attachment_url)
-                                link_success = self.zendesk.add_wasabi_link_comment(
+                                self.zendesk.add_wasabi_link_comment(
                                     ticket_id=ticket_id,
                                     comment_id=comment_id,
                                     wasabi_url=wasabi_url,
                                     filename=filename,
                                     img_src=img_src
                                 )
-                                if link_success:
-                                    logger.info(f"[Ticket {ticket_id}] ✓ Added Wasabi link comment for token-URL image {filename} (no redact possible)")
-                                else:
-                                    logger.warning(f"[Ticket {ticket_id}] ✗ Failed to add Wasabi link comment for {filename}")
-                                    result["errors"].append(f"Failed to add Wasabi link comment for {filename}")
+                                logger.info(f"[Ticket {ticket_id}] ✓ Added Wasabi link comment for {filename} (no original_html for redaction)")
                             else:
-                                logger.info(f"[Ticket {ticket_id}] ⚠ Closed ticket — uploaded inline image {filename} to Wasabi only (cannot modify Zendesk)")
+                                logger.info(f"[Ticket {ticket_id}] ⚠ Closed ticket — uploaded inline image {filename} to Wasabi only")
                     else:
                         logger.warning(f"[Ticket {ticket_id}] ✗ Upload to Wasabi failed for inline image {filename}")
                         result["errors"].append(f"Failed to upload inline image {filename} to Wasabi")

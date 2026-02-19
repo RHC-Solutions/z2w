@@ -49,7 +49,7 @@
       {% for t in tickets.items %}
       <tr>
         <td class="font-mono font-semibold">#{{ t.ticket_id }}</td>
-        <td class="font-mono text-muted">{{ t.processed_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td class="font-mono text-muted">{{ t.processed_at.strftime('%d-%m-%Y %H:%M') }}</td>
         <td><span class="badge badge-secondary">{{ t.attachments_count }}</span></td>
         <td><span class="badge badge-{{ 'success' if t.status == 'processed' else 'danger' }}">{{ t.status }}</span></td>
         <td>

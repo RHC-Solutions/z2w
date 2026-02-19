@@ -447,6 +447,9 @@
 <div id="toastContainer"></div>
 
 <script>
+/* Global date formatter — DD-MM-YYYY HH:MM (24h) */
+function fmtDT(d){if(!d)return'—';if(typeof d==='string')d=new Date(d.endsWith('Z')?d:d+'Z');var dd=String(d.getDate()).padStart(2,'0'),mm=String(d.getMonth()+1).padStart(2,'0'),yy=d.getFullYear(),hh=String(d.getHours()).padStart(2,'0'),mi=String(d.getMinutes()).padStart(2,'0');return dd+'-'+mm+'-'+yy+' '+hh+':'+mi;}
+function fmtTime(d){if(!d)return'—';if(typeof d==='string')d=new Date(d.endsWith('Z')?d:d+'Z');var hh=String(d.getHours()).padStart(2,'0'),mi=String(d.getMinutes()).padStart(2,'0'),ss=String(d.getSeconds()).padStart(2,'0');return hh+':'+mi+':'+ss;}
 const CKEY = 'z2w_sb_collapsed';
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');

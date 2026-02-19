@@ -52,7 +52,7 @@
     </div>
     {% if cache_total %}
     <div class="stat-value" style="font-size:18px">{{ "{:,}".format(cache_total) }}</div>
-    <div class="stat-sub">Last sync: {% if cache_last_sync %}{{ cache_last_sync.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}never{% endif %}</div>
+    <div class="stat-sub">Last sync: {% if cache_last_sync %}{{ cache_last_sync.strftime('%d-%m-%Y %H:%M') }}{% else %}never{% endif %}</div>
     {% else %}
     <div class="stat-value text-muted" style="font-size:14px">Not synced</div>
     <div class="stat-sub">Sync runs with daily offload</div>
@@ -95,13 +95,13 @@
       <tbody id="logsTbody">
         {% for log in recent_logs %}
         {% set d = (log.details | fromjson) if log.details else {} %}
-        <tr data-date="{{ log.run_date.strftime('%Y-%m-%d %H:%M') }}"
+        <tr data-date="{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}"
             data-tickets="{{ log.tickets_processed }}"
             data-attachments="{{ log.attachments_uploaded }}"
             data-inline="{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}"
             data-errors="{{ log.errors_count or 0 }}"
             data-status="{{ log.status }}">
-          <td class="font-mono">{{ log.run_date.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="font-mono">{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}</td>
           <td>{{ log.tickets_processed }}</td>
           <td>{{ log.attachments_uploaded }}</td>
           <td>{% if d.get('inlines_uploaded', log.inlines_uploaded or 0) > 0 %}<span class="badge badge-primary">{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}</span>{% else %}0{% endif %}</td>
@@ -155,7 +155,7 @@ function updateSchedulerStatus() {
     const el = document.getElementById('scheduler-status');
     el.textContent = data.running ? 'Running' : 'Stopped';
     el.style.color = data.running ? 'var(--success)' : 'var(--muted-foreground)';
-    if (data.next_run) document.getElementById('next-run').textContent = 'Next: ' + new Date(data.next_run).toLocaleString();
+    if (data.next_run) document.getElementById('next-run').textContent = 'Next: ' + fmtDT(data.next_run);
   });
 }
 function runNow() {

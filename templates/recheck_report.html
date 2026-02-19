@@ -74,7 +74,7 @@
 {% set p = last_log._parsed %}
 <div id="dbLogPanel" {% if running %}style="display:none"{% endif %}>
   <div class="alert alert-info flex items-center justify-between mb-4">
-    <span>Last recheck: <strong>{{ last_log.run_date.strftime('%Y-%m-%d %H:%M UTC') }}</strong></span>
+    <span>Last recheck: <strong>{{ last_log.run_date.strftime('%d-%m-%Y %H:%M') }}</strong></span>
     <span class="badge badge-{{ 'success' if last_log.status == 'completed' else 'warning' }}">{{ last_log.status }}</span>
   </div>
 
@@ -243,8 +243,7 @@ function switchTab(tab){
 function loadNextRun(){
   fetch('/api/recheck_status').then(function(r){return r.json();}).then(function(d){
     if(d.next_scheduled_run){
-      var nd=new Date(d.next_scheduled_run.endsWith('Z')?d.next_scheduled_run:d.next_scheduled_run+'Z');
-      document.getElementById('nextRunLabel').textContent=nd.toLocaleString();
+      document.getElementById('nextRunLabel').textContent=fmtDT(d.next_scheduled_run);
     } else document.getElementById('nextRunLabel').textContent='N/A';
   }).catch(function(){document.getElementById('nextRunLabel').textContent='N/A';});
 }
@@ -268,7 +267,7 @@ function renderSkippedTable(){
   var zdBase=_subdomain?'https://'+_subdomain+'.zendesk.com/agent/tickets/':null;
   var rows=_skippedTickets.map(function(t){
     var link=zdBase?'<a href="'+zdBase+t.ticket_id+'" target="_blank" class="btn btn-outline btn-xs">↗ Open</a>':'—';
-    var ts=t.processed_at?new Date(t.processed_at.endsWith('Z')?t.processed_at:t.processed_at+'Z').toLocaleString():'—';
+    var ts=t.processed_at?fmtDT(t.processed_at):'—';
     var err=t.error_message?'<span class="text-destructive text-xs" title="'+esc(t.error_message)+'">⚠ '+esc(t.error_message.substring(0,80))+(t.error_message.length>80?'…':'')+'</span>':'<span class="text-muted">—</span>';
     return'<tr data-id="'+t.ticket_id+'" data-err="'+esc((t.error_message||'').toLowerCase())+'" id="skrow-'+t.ticket_id+'">'+
       '<td class="font-mono font-semibold">#'+t.ticket_id+'</td><td>'+link+'</td>'+
@@ -354,7 +353,7 @@ function statCardHtml(val,label,color){
 
 function renderLiveSummary(s){
   var zdBase=_subdomain?'https://'+_subdomain+'.zendesk.com/agent/tickets/':null;
-  var timeStr=s.run_date?new Date(s.run_date.endsWith('Z')?s.run_date:s.run_date+'Z').toLocaleString():'—';
+  var timeStr=s.run_date?fmtDT(s.run_date):'—';
   var errCount=(s.errors||[]).length;
   var errHtml=errCount>0?'<div class="alert alert-danger mb-3"><strong>⚠ '+errCount+' error(s):</strong><ul style="margin:6px 0 0 18px;font-size:12px">'+s.errors.slice(0,20).map(function(e){return'<li><code>'+esc(e)+'</code></li>';}).join('')+(errCount>20?'<li class="text-muted">…and '+(errCount-20)+' more.</li>':'')+'</ul></div>':'';
   var skippedHtml=(s.tickets_genuinely_empty||s.tickets_404)?'<div class="alert alert-info mb-3 text-sm"><strong>Why tickets were skipped:</strong><ul style="margin:6px 0 0 18px">'+
@@ -409,9 +408,9 @@ function offloadTicket(id,btn){
 
 function poll(){
   fetch('/api/recheck_status').then(function(r){return r.json();}).then(function(data){
-    if(data.next_scheduled_run){var d=new Date(data.next_scheduled_run.endsWith('Z')?data.next_scheduled_run:data.next_scheduled_run+'Z');document.getElementById('nextRunLabel').textContent=d.toLocaleString();}
+    if(data.next_scheduled_run){document.getElementById('nextRunLabel').textContent=fmtDT(data.next_scheduled_run);}
     if(data.running){
-      if(data.started_at&&!startedAt){startedAt=new Date(data.started_at.endsWith('Z')?data.started_at:data.started_at+'Z').getTime();document.getElementById('startedAtLabel').textContent=new Date(startedAt).toLocaleTimeString();}
+      if(data.started_at&&!startedAt){startedAt=new Date(data.started_at.endsWith('Z')?data.started_at:data.started_at+'Z').getTime();document.getElementById('startedAtLabel').textContent=fmtTime(new Date(startedAt));}
       updateProgress(data.progress||{},data.summary||null);
       document.getElementById('progressPanel').style.removeProperty('display');
       document.getElementById('noDataPanel').style.display='none';
@@ -432,7 +431,7 @@ document.getElementById('newRecheckConfirmBtn').addEventListener('click',functio
     if(d.success){
       showToast('Recheck started…','info');
       startedAt=Date.now();
-      document.getElementById('startedAtLabel').textContent=new Date(startedAt).toLocaleTimeString();
+      document.getElementById('startedAtLabel').textContent=fmtTime(new Date(startedAt));
       document.getElementById('progressPanel').style.removeProperty('display');
       document.getElementById('noDataPanel').style.display='none';
       document.getElementById('liveSummaryPanel').style.display='none';
@@ -453,7 +452,7 @@ document.getElementById('newRecheckConfirmBtn').addEventListener('click',functio
   }).catch(function(){});
   {% if running %}
   startedAt={{ ('new Date("' + started_at + ('Z' if not started_at.endswith('Z') else '') + '").getTime()')|safe if started_at else 'Date.now()' }};
-  document.getElementById('startedAtLabel').textContent=new Date(startedAt).toLocaleTimeString();
+  document.getElementById('startedAtLabel').textContent=fmtTime(new Date(startedAt));
   {% if progress and progress.get('total') %}updateProgress({{ progress|tojson }},null);{% endif %}
   clearInterval(pollInterval); pollInterval=setInterval(poll,4000);
   clearInterval(elapsedInterval); elapsedInterval=setInterval(updateElapsed,1000);

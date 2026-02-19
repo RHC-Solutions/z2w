@@ -21,7 +21,7 @@
       {% for log in logs.items %}
       <tr>
         <td class="font-mono">
-          {{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}
+          {{ log.run_date.strftime('%d-%m-%Y %H:%M:%S') }}
           {% if log.details and '"run_mode": "recheck_all"' in log.details %}
           <br><a href="{{ url_for('recheck_report') }}" class="badge badge-warning" style="text-decoration:none">⟳ recheck-all</a>
           {% endif %}

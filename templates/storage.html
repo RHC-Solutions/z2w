@@ -4,7 +4,7 @@
 {% block page_sub %}Live snapshot of attachments still stored in Zendesk{% endblock %}
 {% block topbar_actions %}
 {% if last_updated %}
-<span class="badge badge-secondary">Updated {{ last_updated.strftime('%Y-%m-%d %H:%M') if last_updated is not string else last_updated[:16] }}</span>
+<span class="badge badge-secondary">Updated {{ last_updated.strftime('%d-%m-%Y %H:%M') if last_updated is not string else last_updated[:16] }}</span>
 {% endif %}
 {% if next_run %}
 <span class="badge badge-muted">Next: {{ next_run }}</span>
@@ -180,7 +180,7 @@
           {% set mb = (row.size_bytes or 0) / 1048576 %}
           {% if mb >= 1000 %}{{ "%.2f"|format(mb/1024) }} GB{% elif mb >= 1 %}{{ "%.1f"|format(mb) }} MB{% else %}{{ "%.0f"|format((row.size_bytes or 0)/1024) }} KB{% endif %}
         </td>
-        <td class="font-mono text-muted text-sm">{{ row.updated_at.strftime('%Y-%m-%d %H:%M') if row.updated_at else '—' }}</td>
+        <td class="font-mono text-muted text-sm">{{ row.updated_at.strftime('%d-%m-%Y %H:%M') if row.updated_at else '—' }}</td>
       </tr>
       {% else %}
       <tr><td colspan="6" class="text-muted text-center" style="padding:24px">No tickets found.</td></tr>

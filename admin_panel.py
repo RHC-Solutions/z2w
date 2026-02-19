@@ -790,7 +790,7 @@ def storage_report():
             if sched.scheduler.running:
                 job = sched.scheduler.get_job('storage_snapshot')
                 if job and job.next_run_time:
-                    next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M UTC')
+                    next_run = job.next_run_time.strftime('%d-%m-%Y %H:%M')
         except Exception:
             pass
 

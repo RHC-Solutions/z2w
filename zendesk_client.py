@@ -366,6 +366,99 @@ class ZendeskClient:
                 print(f"  Response: {e.response.text[:300]}")
             return False
 
+    def redact_inline_image_agent_workspace(self, ticket_id: int, comment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
+        """
+        Redact a token-URL inline image from a comment using the Agent Workspace
+        Redaction API (PUT /api/v2/comment_redactions/{comment_id}).
+        This works even when there is no attachment_id — it redacts the <img> tag
+        directly from the HTML body, freeing storage in Zendesk.
+        After redaction, the image is replaced with ▇ characters.
+        """
+        if not self.base_url:
+            return False
+
+        try:
+            # Step 1: Get the original comment's full html_body
+            comments = self.get_ticket_comments(ticket_id)
+            original_comment = None
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    original_comment = comment
+                    break
+
+            if not original_comment:
+                logger.warning(f"[AgentWSRedact] Comment {comment_id} not found for ticket {ticket_id}")
+                return False
+
+            html_body = original_comment.get("html_body", "") or ""
+            if not html_body:
+                logger.warning(f"[AgentWSRedact] Empty html_body for comment {comment_id} in ticket {ticket_id}")
+                return False
+
+            # Step 2: Replace the original <img> tag with a redacted version.
+            # The Agent Workspace API expects the full html_body with the target
+            # element marked with the 'redact' attribute.
+            wasabi_link = (
+                f'<a href="{wasabi_url}" target="_blank" '
+                f'rel="noopener noreferrer">📎 {filename}</a>'
+            )
+            # Build the redacted img tag — add 'redact' attribute to tell ZD to remove it
+            redacted_img = original_html
+            if redacted_img.rstrip().endswith('/>'):
+                redacted_img = redacted_img.rstrip()[:-2].rstrip() + ' redact />'
+            elif redacted_img.rstrip().endswith('>'):
+                redacted_img = redacted_img.rstrip()[:-1].rstrip() + ' redact>'
+
+            modified_html = html_body.replace(original_html, redacted_img)
+
+            if modified_html == html_body:
+                logger.warning(
+                    f"[AgentWSRedact] Could not find original <img> tag in html_body "
+                    f"for comment {comment_id} in ticket {ticket_id}"
+                )
+                return False
+
+            # Step 3: Call the Agent Workspace redaction endpoint
+            url = f"{self.base_url}/comment_redactions/{comment_id}.json"
+            payload = {
+                "ticket_id": ticket_id,
+                "html_body": modified_html,
+            }
+            resp = self.session.put(url, json=payload)
+
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get('Retry-After', 30))
+                logger.warning(f"[AgentWSRedact] Rate-limited, waiting {retry_after}s")
+                time.sleep(retry_after)
+                resp = self.session.put(url, json=payload)
+
+            if resp.ok:
+                logger.info(
+                    f"[AgentWSRedact] ✓ Redacted inline image '{filename}' from "
+                    f"comment {comment_id} in ticket {ticket_id}"
+                )
+                # Step 4: Add a private comment with the Wasabi link so the file is still accessible
+                try:
+                    link_body = (
+                        f'<p>📎 Inline image offloaded to secure storage: '
+                        f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
+                    )
+                    update_data = {"ticket": {"comment": {"html_body": link_body, "public": False}}}
+                    self.session.put(f"{self.base_url}/tickets/{ticket_id}.json", json=update_data)
+                except Exception as link_err:
+                    logger.warning(f"[AgentWSRedact] Could not add Wasabi link comment: {link_err}")
+                return True
+            else:
+                logger.warning(
+                    f"[AgentWSRedact] ✗ Failed ({resp.status_code}) to redact inline image "
+                    f"in comment {comment_id} for ticket {ticket_id}: {resp.text[:300]}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"[AgentWSRedact] Exception for ticket {ticket_id} comment {comment_id}: {e}", exc_info=True)
+            return False
+
     def replace_inline_image_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
         """
         Replace an inline image in a comment with a Wasabi link

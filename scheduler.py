@@ -10,7 +10,7 @@ from email_reporter import EmailReporter
 from telegram_reporter import TelegramReporter
 from slack_reporter import SlackReporter
 from backup_manager import BackupManager
-from database import get_db, OffloadLog, ZendeskStorageSnapshot
+from database import get_db, OffloadLog, ZendeskStorageSnapshot, Setting
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
 import logging
 import threading
@@ -51,9 +51,72 @@ class OffloadScheduler:
         self._storage_lock = threading.Lock()
         self._storage_running = False
 
+    # ── helpers shared by full / delta snapshot paths ──────────────────
+    def _scan_ticket_storage(self, tid, subj, zd_status, db, now):
+        """Fetch comments for *one* ticket from Zendesk, count attachments and
+        inline images, and upsert the result into zendesk_storage_snapshot.
+        Returns (ticket_size_bytes, True) on success, (0, False) on error/skip."""
+        import re
+        url = f"{self.offloader.zendesk.base_url}/tickets/{tid}/comments.json"
+        resp = self.offloader.zendesk.session.get(url, timeout=15)
+        if resp.status_code == 404:
+            return 0, True          # ticket deleted — skip silently
+        if resp.status_code == 429:
+            import time as _time
+            retry_after = int(resp.headers.get('Retry-After', 10))
+            logger.warning(f"[StorageSnapshot] Rate limited, sleeping {retry_after}s")
+            _time.sleep(retry_after)
+            return 0, False
+        if not resp.ok:
+            return 0, False
+
+        comments = resp.json().get("comments", [])
+        attach_count = 0
+        inline_count = 0
+        ticket_size = 0
+        for c in comments:
+            for a in c.get("attachments", []):
+                fname = a.get("file_name", "")
+                if fname.lower().endswith("redacted.txt"):
+                    continue
+                attach_count += 1
+                ticket_size += a.get("size", 0)
+            html = c.get("html_body", "") or ""
+            for _ in re.finditer(r'src="https://[^"]*zendesk[^"]*attachments[^"]*"', html, re.IGNORECASE):
+                inline_count += 1
+
+        row = db.query(ZendeskStorageSnapshot).filter_by(ticket_id=tid).first()
+        if row:
+            row.subject      = subj or ""
+            row.zd_status    = zd_status
+            row.attach_count = attach_count
+            row.inline_count = inline_count
+            row.total_size   = ticket_size
+            row.last_seen_at = now
+            row.updated_at   = now
+        else:
+            db.add(ZendeskStorageSnapshot(
+                ticket_id    = tid,
+                subject      = subj or "",
+                zd_status    = zd_status,
+                attach_count = attach_count,
+                inline_count = inline_count,
+                total_size   = ticket_size,
+                last_seen_at = now,
+                updated_at   = now,
+            ))
+        return ticket_size, True
+
     def storage_snapshot_job(self):
-        """Interval job: scan all Zendesk tickets with attachments and record their
-        current storage usage in the zendesk_storage_snapshot table.
+        """Interval job: scan Zendesk tickets and record their current storage
+        usage in the zendesk_storage_snapshot table.
+
+        Uses **delta mode** by default — only re-scans tickets updated since the
+        last successful run (tracked via the ``STORAGE_SNAPSHOT_LAST_TS`` setting).
+        Falls back to a full scan on the very first run or when the setting is
+        missing.  A full scan can also be forced by setting the setting value to
+        ``"0"``.
+
         Skips if already running."""
         if self._storage_running:
             logger.debug("[StorageSnapshot] Previous run still active — skipping")
@@ -66,141 +129,247 @@ class OffloadScheduler:
             logger.info("[StorageSnapshot] Starting storage snapshot refresh…")
             start = datetime.utcnow()
 
-            import re
+            import math
             import time as _time
-            from database import ZendeskTicketCache
+            from database import ZendeskTicketCache, Setting
 
-            # ── Load ticket cache as plain Python tuples so they survive
-            #    session close/reopen between batches (no DetachedInstanceError)
-            db = get_db()
-            try:
-                cache_tuples = (
-                    db.query(
-                        ZendeskTicketCache.ticket_id,
-                        ZendeskTicketCache.subject,
-                        ZendeskTicketCache.status,
-                    )
-                    .all()
-                )
-            finally:
-                db.close()
-
-            total_tickets = len(cache_tuples)
-            logger.info(f"[StorageSnapshot] Scanning {total_tickets} cached tickets…")
-            now = datetime.utcnow()
-            updated = 0
-            errors = 0
-            total_size = 0
+            SETTING_KEY = 'STORAGE_SNAPSHOT_LAST_TS'
             batch_size = 50
 
-            # Open a fresh DB session for writes
+            # ── Determine mode: delta vs full ─────────────────────────────
             db = get_db()
             try:
-                for idx, (tid, subj, zd_status) in enumerate(cache_tuples):
+                setting_row = db.query(Setting).filter_by(key=SETTING_KEY).first()
+                last_ts = None
+                if setting_row and setting_row.value and setting_row.value != '0':
                     try:
-                        # Pull live comment/attachment list from Zendesk
-                        url = f"{self.offloader.zendesk.base_url}/tickets/{tid}/comments.json"
-                        resp = self.offloader.zendesk.session.get(url, timeout=15)
-                        if resp.status_code == 404:
-                            continue
-                        if resp.status_code == 429:
-                            # Rate limited — wait and skip
-                            retry_after = int(resp.headers.get('Retry-After', 10))
-                            logger.warning(f"[StorageSnapshot] Rate limited, sleeping {retry_after}s")
-                            _time.sleep(retry_after)
-                            continue
-                        if not resp.ok:
-                            errors += 1
-                            continue
-                        comments = resp.json().get("comments", [])
-
-                        attach_count = 0
-                        inline_count = 0
-                        ticket_size = 0
-                        for c in comments:
-                            for a in c.get("attachments", []):
-                                fname = a.get("file_name", "")
-                                if fname.lower().endswith("redacted.txt"):
-                                    continue
-                                attach_count += 1
-                                ticket_size += a.get("size", 0)
-                            # Count inline images in html_body
-                            html = c.get("html_body", "") or ""
-                            for _ in re.finditer(r'src="https://[^"]*zendesk[^"]*attachments[^"]*"', html, re.IGNORECASE):
-                                inline_count += 1
-
-                        total_size += ticket_size
-
-                        # Upsert row — use plain values from tuple, not ORM objects
-                        row = db.query(ZendeskStorageSnapshot).filter_by(ticket_id=tid).first()
-                        if row:
-                            row.subject      = subj or ""
-                            row.zd_status    = zd_status
-                            row.attach_count = attach_count
-                            row.inline_count = inline_count
-                            row.total_size   = ticket_size
-                            row.last_seen_at = now
-                            row.updated_at   = now
-                        else:
-                            db.add(ZendeskStorageSnapshot(
-                                ticket_id    = tid,
-                                subject      = subj or "",
-                                zd_status    = zd_status,
-                                attach_count = attach_count,
-                                inline_count = inline_count,
-                                total_size   = ticket_size,
-                                last_seen_at = now,
-                                updated_at   = now,
-                            ))
-                        updated += 1
-
-                        # Commit in small batches and release DB lock between them
-                        if updated % batch_size == 0:
-                            for _retry in range(3):
-                                try:
-                                    db.commit()
-                                    break
-                                except Exception as ce:
-                                    db.rollback()
-                                    if 'locked' in str(ce).lower() and _retry < 2:
-                                        _time.sleep(1 * (_retry + 1))
-                                        continue
-                                    raise
-                            db.close()
-                            db = get_db()
-                            logger.info(f"[StorageSnapshot] progress {updated}/{total_tickets}…")
-
-                    except Exception as e:
-                        errors += 1
-                        if 'locked' in str(e).lower():
-                            logger.warning(f"[StorageSnapshot] ticket {tid}: DB locked, will retry on next run")
-                            db.rollback()
-                        else:
-                            logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
-                            try:
-                                db.rollback()
-                            except Exception:
-                                pass
-
-                # Final commit
-                for _retry in range(3):
-                    try:
-                        db.commit()
-                        break
-                    except Exception as ce:
-                        db.rollback()
-                        if 'locked' in str(ce).lower() and _retry < 2:
-                            _time.sleep(1 * (_retry + 1))
-                            continue
-                        logger.error(f"[StorageSnapshot] Final commit failed: {ce}")
-
-                elapsed = (datetime.utcnow() - start).total_seconds()
-                logger.info(
-                    f"[StorageSnapshot] Done — {updated} tickets scanned, "
-                    f"{total_size/1024/1024:.1f} MB total, {errors} errors, {elapsed:.0f}s"
-                )
+                        last_ts = float(setting_row.value)
+                    except (ValueError, TypeError):
+                        pass
             finally:
                 db.close()
+
+            is_full_scan = last_ts is None
+            run_start_ts = math.floor(start.timestamp())
+
+            if is_full_scan:
+                # ── FULL SCAN (first run / forced) ────────────────────────
+                logger.info("[StorageSnapshot] No previous timestamp — running FULL scan")
+                db = get_db()
+                try:
+                    cache_tuples = (
+                        db.query(
+                            ZendeskTicketCache.ticket_id,
+                            ZendeskTicketCache.subject,
+                            ZendeskTicketCache.status,
+                        ).all()
+                    )
+                finally:
+                    db.close()
+
+                total_tickets = len(cache_tuples)
+                logger.info(f"[StorageSnapshot] Full scan: {total_tickets} cached tickets")
+                now = datetime.utcnow()
+                updated = 0
+                errors = 0
+                total_size = 0
+
+                db = get_db()
+                try:
+                    for idx, (tid, subj, zd_status) in enumerate(cache_tuples):
+                        try:
+                            tsize, ok = self._scan_ticket_storage(tid, subj, zd_status, db, now)
+                            if ok:
+                                updated += 1
+                                total_size += tsize
+                            else:
+                                errors += 1
+
+                            if updated % batch_size == 0 and updated > 0:
+                                for _retry in range(3):
+                                    try:
+                                        db.commit()
+                                        break
+                                    except Exception as ce:
+                                        db.rollback()
+                                        if 'locked' in str(ce).lower() and _retry < 2:
+                                            _time.sleep(1 * (_retry + 1))
+                                            continue
+                                        raise
+                                db.close()
+                                db = get_db()
+                                logger.info(f"[StorageSnapshot] progress {updated}/{total_tickets}…")
+
+                        except Exception as e:
+                            errors += 1
+                            if 'locked' in str(e).lower():
+                                logger.warning(f"[StorageSnapshot] ticket {tid}: DB locked, will retry on next run")
+                                db.rollback()
+                            else:
+                                logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
+                                try:
+                                    db.rollback()
+                                except Exception:
+                                    pass
+
+                    # Final commit
+                    for _retry in range(3):
+                        try:
+                            db.commit()
+                            break
+                        except Exception as ce:
+                            db.rollback()
+                            if 'locked' in str(ce).lower() and _retry < 2:
+                                _time.sleep(1 * (_retry + 1))
+                                continue
+                            logger.error(f"[StorageSnapshot] Final commit failed: {ce}")
+                finally:
+                    db.close()
+
+            else:
+                # ── DELTA SCAN ────────────────────────────────────────────
+                logger.info(f"[StorageSnapshot] Delta scan — tickets updated since {datetime.utcfromtimestamp(last_ts).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+                # Use Zendesk incremental API to get only changed tickets
+                changed_ids = set()
+                inc_url = f"{self.offloader.zendesk.base_url}/incremental/tickets.json"
+                params = {"start_time": int(last_ts)}
+                while inc_url:
+                    try:
+                        resp = self.offloader.zendesk.session.get(inc_url, params=params, timeout=30)
+                        if resp.status_code == 429:
+                            retry_after = int(resp.headers.get('Retry-After', 30))
+                            logger.warning(f"[StorageSnapshot] Rate limited during incremental fetch, waiting {retry_after}s")
+                            _time.sleep(retry_after)
+                            continue
+                        if resp.status_code == 422:
+                            logger.info("[StorageSnapshot] start_time too recent, nothing to delta-scan")
+                            break
+                        resp.raise_for_status()
+                        data = resp.json()
+                        for t in data.get("tickets", []):
+                            if t.get("status") != "deleted":
+                                changed_ids.add(t["id"])
+                        if data.get("end_of_stream", True):
+                            break
+                        next_page = data.get("next_page")
+                        if not next_page:
+                            break
+                        inc_url = next_page
+                        params = None
+                    except Exception as e:
+                        logger.error(f"[StorageSnapshot] Incremental fetch error: {e}")
+                        break
+
+                total_tickets = len(changed_ids)
+                logger.info(f"[StorageSnapshot] Delta: {total_tickets} ticket(s) changed since last run")
+
+                if total_tickets == 0:
+                    # Nothing changed — just update the timestamp and return
+                    db = get_db()
+                    try:
+                        row = db.query(Setting).filter_by(key=SETTING_KEY).first()
+                        if row:
+                            row.value = str(run_start_ts)
+                        db.commit()
+                    finally:
+                        db.close()
+                    elapsed = (datetime.utcnow() - start).total_seconds()
+                    logger.info(f"[StorageSnapshot] Done (no changes) — {elapsed:.0f}s")
+                    self._storage_running = False
+                    self._storage_lock.release()
+                    return
+
+                # Load metadata for changed tickets from cache
+                db = get_db()
+                try:
+                    cache_map = {}
+                    from database import ZendeskTicketCache as ZTC
+                    rows = db.query(ZTC.ticket_id, ZTC.subject, ZTC.status).filter(
+                        ZTC.ticket_id.in_(changed_ids)
+                    ).all()
+                    for tid, subj, status in rows:
+                        cache_map[tid] = (subj, status)
+                finally:
+                    db.close()
+
+                now = datetime.utcnow()
+                updated = 0
+                errors = 0
+                total_size = 0
+
+                db = get_db()
+                try:
+                    for tid in changed_ids:
+                        subj, zd_status = cache_map.get(tid, ("", None))
+                        try:
+                            tsize, ok = self._scan_ticket_storage(tid, subj, zd_status, db, now)
+                            if ok:
+                                updated += 1
+                                total_size += tsize
+                            else:
+                                errors += 1
+
+                            if updated % batch_size == 0 and updated > 0:
+                                for _retry in range(3):
+                                    try:
+                                        db.commit()
+                                        break
+                                    except Exception as ce:
+                                        db.rollback()
+                                        if 'locked' in str(ce).lower() and _retry < 2:
+                                            _time.sleep(1 * (_retry + 1))
+                                            continue
+                                        raise
+                                db.close()
+                                db = get_db()
+                                logger.info(f"[StorageSnapshot] delta progress {updated}/{total_tickets}…")
+
+                        except Exception as e:
+                            errors += 1
+                            if 'locked' in str(e).lower():
+                                logger.warning(f"[StorageSnapshot] ticket {tid}: DB locked, will retry on next run")
+                                db.rollback()
+                            else:
+                                logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
+                                try:
+                                    db.rollback()
+                                except Exception:
+                                    pass
+
+                    # Final commit
+                    for _retry in range(3):
+                        try:
+                            db.commit()
+                            break
+                        except Exception as ce:
+                            db.rollback()
+                            if 'locked' in str(ce).lower() and _retry < 2:
+                                _time.sleep(1 * (_retry + 1))
+                                continue
+                            logger.error(f"[StorageSnapshot] Final commit failed: {ce}")
+                finally:
+                    db.close()
+
+            # ── Persist the timestamp so the next run is a delta ──────────
+            db = get_db()
+            try:
+                row = db.query(Setting).filter_by(key=SETTING_KEY).first()
+                if row:
+                    row.value = str(run_start_ts)
+                else:
+                    db.add(Setting(key=SETTING_KEY, value=str(run_start_ts),
+                                   description='Unix timestamp of last successful storage snapshot run'))
+                db.commit()
+            finally:
+                db.close()
+
+            elapsed = (datetime.utcnow() - start).total_seconds()
+            mode = "FULL" if is_full_scan else "DELTA"
+            logger.info(
+                f"[StorageSnapshot] Done ({mode}) — {updated} tickets scanned, "
+                f"{total_size/1024/1024:.1f} MB, {errors} errors, {elapsed:.0f}s"
+            )
 
         except Exception as e:
             logger.error(f"[StorageSnapshot] Unhandled exception: {e}", exc_info=True)
