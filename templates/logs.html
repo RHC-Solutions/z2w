@@ -1,74 +1,62 @@
 {% extends "base.html" %}
+{% block title %}Offload Logs — z2w{% endblock %}
+{% block page_title %}Offload Logs{% endblock %}
+{% block page_sub %}Full history of all offload runs{% endblock %}
 
 {% block content %}
-<h1 class="h2">Offload Logs</h1>
-
-<div class="mt-4">
-    <table class="table table-striped">
-        <thead>
-            <tr>
-                <th>Run Date</th>
-                <th>Tickets Processed</th>
-                <th>Attachments Uploaded</th>
-                <th>Wasabi Files</th>
-                <th>Errors</th>
-                <th>Status</th>
-                <th>Report Sent</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for log in logs.items %}
-            <tr>
-                <td>{{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                <td>{{ log.tickets_processed }}</td>
-                <td>{{ log.attachments_uploaded }}</td>
-                <td>
-                    {% if log.wasabi_urls %}
-                        <div style="max-width: 300px;">
-                            {% for file_info in log.wasabi_urls %}
-                                <a href="{{ file_info.url }}" target="_blank" class="btn btn-sm btn-outline-primary mb-1" style="display: inline-block; margin-right: 5px;" title="Ticket #{{ file_info.ticket_id }}: {{ file_info.filename }}">
-                                    <i class="bi bi-download"></i> {{ file_info.filename[:20] }}{% if file_info.filename|length > 20 %}...{% endif %}
-                                </a>
-                            {% endfor %}
-                        </div>
-                    {% else %}
-                        <span class="text-muted">-</span>
-                    {% endif %}
-                </td>
-                <td>{{ log.errors_count }}</td>
-                <td>
-                    <span class="badge bg-{{ 'success' if log.status == 'completed' else 'warning' }}">
-                        {{ log.status }}
-                    </span>
-                </td>
-                <td>
-                    <i class="bi bi-{{ 'check-circle text-success' if log.report_sent else 'x-circle text-danger' }}"></i>
-                </td>
-            </tr>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Run Date</th>
+        <th>Tickets</th>
+        <th>Attachments</th>
+        <th>Wasabi Files</th>
+        <th>Errors</th>
+        <th>Status</th>
+        <th>Report</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs.items %}
+      <tr>
+        <td class="font-mono">
+          {{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}
+          {% if log.details and '"run_mode": "recheck_all"' in log.details %}
+          <br><a href="{{ url_for('recheck_report') }}" class="badge badge-warning" style="text-decoration:none">⟳ recheck-all</a>
+          {% endif %}
+        </td>
+        <td>{{ log.tickets_processed }}</td>
+        <td>{{ log.attachments_uploaded }}</td>
+        <td>
+          {% if log.wasabi_urls %}
+          <div style="max-width:280px">
+            {% for f in log.wasabi_urls %}
+            <a href="{{ f.url }}" target="_blank" class="btn btn-outline btn-xs mb-1" title="Ticket #{{ f.ticket_id }}: {{ f.filename }}">⬇ {{ f.filename[:18] }}{% if f.filename|length > 18 %}…{% endif %}</a>
             {% endfor %}
-        </tbody>
-    </table>
-    
-    <nav>
-        <ul class="pagination">
-            {% if logs.has_prev %}
-            <li class="page-item"><a class="page-link" href="?page={{ logs.prev_num }}">Previous</a></li>
-            {% endif %}
-            {% for page_num in logs.iter_pages() %}
-                {% if page_num %}
-                    <li class="page-item {{ 'active' if page_num == logs.page else '' }}">
-                        <a class="page-link" href="?page={{ page_num }}">{{ page_num }}</a>
-                    </li>
-                {% else %}
-                    <li class="page-item disabled"><span class="page-link">…</span></li>
-                {% endif %}
-            {% endfor %}
-            {% if logs.has_next %}
-            <li class="page-item"><a class="page-link" href="?page={{ logs.next_num }}">Next</a></li>
-            {% endif %}
-        </ul>
-    </nav>
+          </div>
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        <td>{% if log.errors_count %}<span class="text-destructive font-semibold">{{ log.errors_count }}</span>{% else %}0{% endif %}</td>
+        <td><span class="badge badge-{{ 'success' if log.status == 'completed' else 'warning' }}">{{ log.status }}</span></td>
+        <td>
+          {% if log.report_sent %}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--success)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          {% else %}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--muted-foreground)"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
+<nav class="pagination">
+  {% if logs.has_prev %}<a class="page-link" href="?page={{ logs.prev_num }}">← Prev</a>{% endif %}
+  {% for pn in logs.iter_pages() %}
+    {% if pn %}<a class="page-link {{ 'active' if pn == logs.page else '' }}" href="?page={{ pn }}">{{ pn }}</a>
+    {% else %}<span class="page-link disabled">…</span>{% endif %}
+  {% endfor %}
+  {% if logs.has_next %}<a class="page-link" href="?page={{ logs.next_num }}">Next →</a>{% endif %}
+</nav>
 {% endblock %}
-
-

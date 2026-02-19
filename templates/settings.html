@@ -1,217 +1,131 @@
 {% extends "base.html" %}
+{% block title %}Settings — z2w{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_sub %}Configure Zendesk, Wasabi, notifications and scheduler{% endblock %}
+{% block topbar_actions %}
+<button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('settingsForm').requestSubmit()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+  Save Settings
+</button>
+{% endblock %}
 
 {% block content %}
-<h1 class="h2">Settings</h1>
+<form method="POST" id="settingsForm">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
 
-<form method="POST" class="mt-4">
-    <div class="row">
-        <div class="col-md-6">
-            <h3>Zendesk Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">Zendesk Subdomain</label>
-                <input type="text" class="form-control" name="ZENDESK_SUBDOMAIN" value="{{ settings.get('ZENDESK_SUBDOMAIN', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Zendesk Email</label>
-                <input type="email" class="form-control" name="ZENDESK_EMAIL" value="{{ settings.get('ZENDESK_EMAIL', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Zendesk API Token</label>
-                <input type="password" class="form-control" name="ZENDESK_API_TOKEN" value="{{ settings.get('ZENDESK_API_TOKEN', '') }}">
-            </div>
-            <button type="button" class="btn btn-info" onclick="testConnection('zendesk')">Test Connection</button>
-        </div>
-        
-        <div class="col-md-6">
-            <h3>Wasabi B2 Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">Wasabi Endpoint</label>
-                <input type="text" class="form-control" name="WASABI_ENDPOINT" value="{{ settings.get('WASABI_ENDPOINT', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Access Key</label>
-                <input type="text" class="form-control" name="WASABI_ACCESS_KEY" value="{{ settings.get('WASABI_ACCESS_KEY', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Secret Key</label>
-                <input type="password" class="form-control" name="WASABI_SECRET_KEY" value="{{ settings.get('WASABI_SECRET_KEY', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Bucket Name</label>
-                <input type="text" class="form-control" name="WASABI_BUCKET_NAME" value="{{ settings.get('WASABI_BUCKET_NAME', '') }}">
-            </div>
-            <button type="button" class="btn btn-info" onclick="testConnection('wasabi')">Test Connection</button>
-        </div>
+  <!-- Zendesk -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Zendesk Configuration</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Subdomain</label><input type="text" class="form-control" name="ZENDESK_SUBDOMAIN" value="{{ settings.get('ZENDESK_SUBDOMAIN','') }}" placeholder="yourcompany"></div>
+      <div class="form-group"><label class="form-label">Email</label><input type="email" class="form-control" name="ZENDESK_EMAIL" value="{{ settings.get('ZENDESK_EMAIL','') }}"></div>
+      <div class="form-group"><label class="form-label">API Token</label><input type="password" class="form-control" name="ZENDESK_API_TOKEN" value="{{ settings.get('ZENDESK_API_TOKEN','') }}"></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('zendesk')">Test Connection</button>
+      <div id="zendesk-test-result" class="mt-2 text-sm"></div>
     </div>
-    
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <h3>Email Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">SMTP Server</label>
-                <input type="text" class="form-control" name="SMTP_SERVER" value="{{ settings.get('SMTP_SERVER', 'smtp.gmail.com') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">SMTP Port</label>
-                <input type="number" class="form-control" name="SMTP_PORT" value="{{ settings.get('SMTP_PORT', '587') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">SMTP Username</label>
-                <input type="email" class="form-control" name="SMTP_USERNAME" value="{{ settings.get('SMTP_USERNAME', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">SMTP Password</label>
-                <input type="password" class="form-control" name="SMTP_PASSWORD" value="{{ settings.get('SMTP_PASSWORD', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Report Email</label>
-                <input type="email" class="form-control" name="REPORT_EMAIL" value="{{ settings.get('REPORT_EMAIL', 'it@go4rex.com') }}">
-            </div>
-        </div>
+  </div>
+
+  <!-- Wasabi -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Wasabi B2 Configuration</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Endpoint</label><input type="text" class="form-control" name="WASABI_ENDPOINT" value="{{ settings.get('WASABI_ENDPOINT','') }}" placeholder="s3.wasabisys.com"></div>
+      <div class="form-group"><label class="form-label">Access Key</label><input type="text" class="form-control" name="WASABI_ACCESS_KEY" value="{{ settings.get('WASABI_ACCESS_KEY','') }}"></div>
+      <div class="form-group"><label class="form-label">Secret Key</label><input type="password" class="form-control" name="WASABI_SECRET_KEY" value="{{ settings.get('WASABI_SECRET_KEY','') }}"></div>
+      <div class="form-group"><label class="form-label">Bucket Name</label><input type="text" class="form-control" name="WASABI_BUCKET_NAME" value="{{ settings.get('WASABI_BUCKET_NAME','') }}"></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('wasabi')">Test Connection</button>
+      <div id="wasabi-test-result" class="mt-2 text-sm"></div>
     </div>
-    
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <h3>Telegram Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">Bot Token</label>
-                <input type="text" class="form-control" name="TELEGRAM_BOT_TOKEN" value="{{ settings.get('TELEGRAM_BOT_TOKEN', '') }}" placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
-                <small class="form-text text-muted">Get your bot token from @BotFather on Telegram</small>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Chat ID</label>
-                <input type="text" class="form-control" name="TELEGRAM_CHAT_ID" value="{{ settings.get('TELEGRAM_CHAT_ID', '') }}" placeholder="-1001234567890">
-                <small class="form-text text-muted">Your Telegram chat ID or channel ID</small>
-            </div>
+  </div>
+
+  <!-- Email -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Email / SMTP</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">SMTP Server</label><input type="text" class="form-control" name="SMTP_SERVER" value="{{ settings.get('SMTP_SERVER','smtp.gmail.com') }}"></div>
+      <div class="form-row-2">
+        <div class="form-group"><label class="form-label">Port</label><input type="number" class="form-control" name="SMTP_PORT" value="{{ settings.get('SMTP_PORT','587') }}"></div>
+        <div class="form-group"><label class="form-label">Use TLS</label>
+          <select class="form-select" name="SMTP_USE_TLS">
+            <option value="true"  {% if settings.get('SMTP_USE_TLS','true') == 'true'  %}selected{% endif %}>Yes</option>
+            <option value="false" {% if settings.get('SMTP_USE_TLS','true') == 'false' %}selected{% endif %}>No</option>
+          </select>
         </div>
-        
-        <div class="col-md-6">
-            <h3>Slack Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">Webhook URL</label>
-                <input type="text" class="form-control" name="SLACK_WEBHOOK_URL" value="{{ settings.get('SLACK_WEBHOOK_URL', '') }}" placeholder="https://hooks.slack.com/services/...">
-                <small class="form-text text-muted">Create an Incoming Webhook in your Slack workspace</small>
-            </div>
-        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Username</label><input type="email" class="form-control" name="SMTP_USERNAME" value="{{ settings.get('SMTP_USERNAME','') }}"></div>
+      <div class="form-group"><label class="form-label">Password</label><input type="password" class="form-control" name="SMTP_PASSWORD" value="{{ settings.get('SMTP_PASSWORD','') }}"></div>
+      <div class="form-group"><label class="form-label">Report Recipients (comma-separated)</label><input type="text" class="form-control" name="REPORT_RECIPIENTS" value="{{ settings.get('REPORT_RECIPIENTS','') }}"></div>
     </div>
-    
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <h3>Scheduler Configuration</h3>
-            <div class="mb-3">
-                <label class="form-label">Timezone</label>
-                <select class="form-select" name="SCHEDULER_TIMEZONE">
-                    <option value="UTC" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'UTC' %}selected{% endif %}>UTC</option>
-                    <option value="America/New_York" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/New_York' %}selected{% endif %}>Eastern Time (ET)</option>
-                    <option value="America/Chicago" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Chicago' %}selected{% endif %}>Central Time (CT)</option>
-                    <option value="America/Denver" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Denver' %}selected{% endif %}>Mountain Time (MT)</option>
-                    <option value="America/Los_Angeles" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'America/Los_Angeles' %}selected{% endif %}>Pacific Time (PT)</option>
-                    <option value="Europe/London" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Europe/London' %}selected{% endif %}>London (GMT)</option>
-                    <option value="Europe/Paris" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Europe/Paris' %}selected{% endif %}>Paris (CET)</option>
-                    <option value="Asia/Tokyo" {% if settings.get('SCHEDULER_TIMEZONE', 'UTC') == 'Asia/Tokyo' %}selected{% endif %}>Tokyo (JST)</option>
-                </select>
-                <small class="form-text text-muted">Timezone for scheduled jobs</small>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Hour (0-23)</label>
-                <input type="number" class="form-control" name="SCHEDULER_HOUR" value="{{ settings.get('SCHEDULER_HOUR', '0') }}" min="0" max="23" required>
-                <small class="form-text text-muted">Hour of day to run scheduled job (24-hour format)</small>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Minute (0-59)</label>
-                <input type="number" class="form-control" name="SCHEDULER_MINUTE" value="{{ settings.get('SCHEDULER_MINUTE', '0') }}" min="0" max="59" required>
-                <small class="form-text text-muted">Minute of hour to run scheduled job</small>
-            </div>
-            <div class="alert alert-info">
-                <strong>Note:</strong> After saving scheduler settings, click "Restart Scheduler" on the Dashboard to apply changes.
-            </div>
-        </div>
+  </div>
+
+  <!-- Telegram -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Telegram Notifications</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Bot Token</label><input type="password" class="form-control" name="TELEGRAM_BOT_TOKEN" value="{{ settings.get('TELEGRAM_BOT_TOKEN','') }}"></div>
+      <div class="form-group"><label class="form-label">Chat ID</label><input type="text" class="form-control" name="TELEGRAM_CHAT_ID" value="{{ settings.get('TELEGRAM_CHAT_ID','') }}"></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('telegram')">Test</button>
+      <div id="telegram-test-result" class="mt-2 text-sm"></div>
     </div>
-    
-    <div class="row mt-4">
-        <div class="col-md-12">
-            <h3>Admin Password</h3>
-            <div class="card border-warning">
-                <div class="card-body">
-                    <h5 class="card-title">Reset Admin Password</h5>
-                    <p class="card-text">
-                        Generate a new secure 64-character password. The new password will be automatically sent to 
-                        <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer">Telegram</a>.
-                    </p>
-                    <p class="card-text">
-                        <small class="text-muted">
-                            <strong>Password Requirements:</strong> 64 characters, includes lowercase, uppercase, numbers, and symbols. 
-                            Excludes ambiguous characters and brackets.
-                        </small>
-                    </p>
-                    <button type="button" class="btn btn-warning" onclick="resetAdminPassword()">
-                        <i class="bi bi-key"></i> Reset Admin Password
-                    </button>
-                </div>
-            </div>
-        </div>
+  </div>
+
+  <!-- Slack -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Slack Notifications</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Webhook URL</label><input type="password" class="form-control" name="SLACK_WEBHOOK_URL" value="{{ settings.get('SLACK_WEBHOOK_URL','') }}"></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('slack')">Test</button>
+      <div id="slack-test-result" class="mt-2 text-sm"></div>
     </div>
-    
-    <div class="mt-4">
-        <button type="submit" class="btn btn-primary">Save Settings</button>
+  </div>
+
+  <!-- Scheduler -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Scheduler</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Offload Time (HH:MM, server time)</label><input type="text" class="form-control" name="OFFLOAD_TIME" value="{{ settings.get('OFFLOAD_TIME','00:00') }}" placeholder="00:00"></div>
+      <div class="form-group"><label class="form-label">Recheck Time (HH:MM)</label><input type="text" class="form-control" name="RECHECK_TIME" value="{{ settings.get('RECHECK_TIME','01:00') }}" placeholder="01:00"></div>
+      <div class="form-group"><label class="form-label">Storage Report Interval (hours)</label><input type="number" class="form-control" name="STORAGE_REPORT_INTERVAL" value="{{ settings.get('STORAGE_REPORT_INTERVAL','6') }}" min="1" max="168"></div>
+      <div class="form-group"><label class="form-label">Max Attachments per Run</label><input type="number" class="form-control" name="MAX_ATTACHMENTS_PER_RUN" value="{{ settings.get('MAX_ATTACHMENTS_PER_RUN','') }}" placeholder="unlimited"></div>
     </div>
+  </div>
+
+  {% if oauth_settings %}
+  <!-- OAuth / SSO -->
+  <div class="card" style="grid-column:1/-1">
+    <div class="card-header"><div class="card-title">Microsoft OAuth / SSO</div></div>
+    <div class="card-body">
+      <div class="form-row-3">
+        <div class="form-group"><label class="form-label">Client ID</label><input type="text" class="form-control" name="OAUTH_CLIENT_ID" value="{{ settings.get('OAUTH_CLIENT_ID','') }}"></div>
+        <div class="form-group"><label class="form-label">Client Secret</label><input type="password" class="form-control" name="OAUTH_CLIENT_SECRET" value="{{ settings.get('OAUTH_CLIENT_SECRET','') }}"></div>
+        <div class="form-group"><label class="form-label">Tenant ID</label><input type="text" class="form-control" name="OAUTH_TENANT_ID" value="{{ settings.get('OAUTH_TENANT_ID','') }}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Allowed Domains (comma-separated, blank = any)</label><input type="text" class="form-control" name="OAUTH_ALLOWED_DOMAINS" value="{{ settings.get('OAUTH_ALLOWED_DOMAINS','') }}"></div>
+    </div>
+  </div>
+  {% endif %}
+
+</div><!-- end grid -->
+
+<div class="mt-4 flex gap-2">
+  <button type="submit" class="btn btn-primary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+    Save Settings
+  </button>
+</div>
 </form>
 
 <script>
 function testConnection(type) {
-    fetch('/api/test_connection', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({type: type})
-    })
-    .then(r => r.json())
-    .then(data => {
-        alert(data.message);
-    });
-}
-
-function resetAdminPassword() {
-    if (!confirm('Are you sure you want to reset the admin password? The new password will be sent to Telegram.')) {
-        return;
-    }
-    
-    if (!confirm('This action cannot be undone. Make sure you have access to Telegram to receive the new password. Continue?')) {
-        return;
-    }
-    
-    fetch('/api/reset_admin_password', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'}
-    })
-    .then(r => {
-        // Check if response is JSON
-        const contentType = r.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-            return r.json();
-        } else {
-            // If not JSON, it's probably an HTML error page
-            return r.text().then(text => {
-                throw new Error('Server returned an error. Please check the console for details.');
-            });
-        }
-    })
-    .then(data => {
-        if (data.success) {
-            if (data.warning) {
-                alert('⚠️ ' + data.message);
-            } else {
-                alert('✅ ' + data.message);
-            }
-        } else {
-            alert('❌ ' + data.message);
-        }
-    })
-    .catch(error => {
-        console.error('Password reset error:', error);
-        alert('❌ Error: ' + error.message);
-    });
+  const el = document.getElementById(type + '-test-result');
+  el.textContent = 'Testing…';
+  el.style.color = 'var(--muted-foreground)';
+  fetch('/api/test_connection/' + type, {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      el.textContent = d.message;
+      el.style.color = d.success ? 'var(--success)' : 'var(--destructive)';
+    }).catch(()=>{ el.textContent='Request failed'; el.style.color='var(--destructive)'; });
 }
 </script>
 {% endblock %}
-
-

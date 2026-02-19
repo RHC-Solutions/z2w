@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Storage Usage — z2w{% endblock %}
+{% block page_title %}Zendesk Storage Usage{% endblock %}
+{% block page_sub %}Live snapshot of attachments still stored in Zendesk{% endblock %}
+{% block topbar_actions %}
+{% if last_updated %}
+<span class="badge badge-secondary">Updated {{ last_updated.strftime('%Y-%m-%d %H:%M') if last_updated is not string else last_updated[:16] }}</span>
+{% endif %}
+{% if next_run %}
+<span class="badge badge-muted">Next: {{ next_run }}</span>
+{% endif %}
+<button class="btn btn-outline btn-sm" id="btnRefresh" onclick="triggerRefresh()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  Refresh Now
+</button>
+{% endblock %}
+
+{% block content %}
+{% if is_empty %}
+<div class="card" style="max-width:560px">
+  <div class="card-body" style="padding:40px;text-align:center">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="40" height="40" style="color:var(--muted-foreground);margin-bottom:16px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 12 12"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></svg>
+    <div class="page-title" style="font-size:16px;margin-bottom:8px">Storage data is being collected…</div>
+    <p class="text-muted" style="font-size:13px">The snapshot job runs automatically on boot and scans all Zendesk tickets. This may take a few minutes for large accounts.</p>
+    <button class="btn btn-primary btn-sm mt-4" onclick="triggerRefresh()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+      Start Refresh Now
+    </button>
+    <div id="refreshStatus" class="mt-3 text-muted text-sm"></div>
+  </div>
+</div>
+{% else %}
+
+<div class="stat-grid mb-4">
+  <div class="stat-card primary">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+      Tickets with storage
+    </div>
+    <div class="stat-value">{{ "{:,}".format(total_tickets) }}</div>
+  </div>
+  <div class="stat-card success">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      Total files in Zendesk
+    </div>
+    <div class="stat-value">{{ "{:,}".format(total_files or 0) }}</div>
+  </div>
+  <div class="stat-card danger">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Still in Zendesk storage
+    </div>
+    {% set gb = (total_bytes or 0) / 1073741824 %}
+    {% if gb >= 1 %}
+    <div class="stat-value">{{ "%.2f"|format(gb) }} GB</div>
+    {% else %}
+    <div class="stat-value">{{ "%.0f"|format((total_bytes or 0) / 1048576) }} MB</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Status filter tabs -->
+<div class="tabs">
+  <button class="tab-btn {% if not status_filter %}active{% endif %}"
+    onclick="location.href='{{ url_for('storage_report', sort=sort, order=order, q=q) }}'">
+    All <span class="badge badge-secondary" style="margin-left:4px">{{ total_tickets }}</span>
+  </button>
+  {% for st, cnt in status_counts.items()|sort %}{% if st %}
+  <button class="tab-btn {% if status_filter == st %}active{% endif %}"
+    onclick="location.href='{{ url_for('storage_report', status=st, sort=sort, order=order, q=q) }}'">
+    {{ st }} <span class="badge badge-secondary" style="margin-left:4px">{{ cnt }}</span>
+  </button>
+  {% endif %}{% endfor %}
+</div>
+
+<!-- Search & sort bar -->
+<form method="GET" action="{{ url_for('storage_report') }}" class="flex flex-wrap gap-2 mb-4">
+  <input type="text" class="form-control" name="q" value="{{ q or '' }}" placeholder="Search subject or ticket ID" style="max-width:280px">
+  {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+  <input type="hidden" name="sort"  value="{{ sort  or 'total_size' }}">
+  <input type="hidden" name="order" value="{{ order or 'desc' }}">
+  <button type="submit" class="btn btn-primary btn-sm">Search</button>
+  <a href="{{ url_for('storage_report') }}" class="btn btn-outline btn-sm">Clear</a>
+</form>
+
+{% macro sort_link(col, label) %}
+  {% set cur_sort  = sort  or 'total_size' %}
+  {% set cur_order = order or 'desc' %}
+  {% if cur_sort == col %}
+    {% set next_order = 'asc' if cur_order == 'desc' else 'desc' %}
+    {% set icon = '↑' if cur_order == 'asc' else '↓' %}
+  {% else %}{% set next_order = 'desc' %}{% set icon = '↕' %}{% endif %}
+  <a href="?sort={{ col }}&order={{ next_order }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ label }} <span class="text-muted">{{ icon }}</span></a>
+{% endmacro %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ sort_link('ticket_id','Ticket ID') }}</th>
+        <th>{{ sort_link('subject','Subject') }}</th>
+        <th>{{ sort_link('zd_status','Status') }}</th>
+        <th>Files</th>
+        <th>{{ sort_link('total_size','Size in ZD') }}</th>
+        <th>{{ sort_link('last_seen_at','Last Scanned') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in tickets.items %}
+      <tr>
+        <td class="font-mono">
+          <a href="https://{{ zendesk_subdomain }}.zendesk.com/agent/tickets/{{ row.ticket_id }}" target="_blank" style="color:var(--primary)">#{{ row.ticket_id }}</a>
+        </td>
+        <td class="truncate" style="max-width:240px" title="{{ row.subject or '' }}">{{ row.subject or '(no subject)' }}</td>
+        <td>
+          {% set sc = {'open':'primary','pending':'warning','solved':'success','closed':'secondary'} %}
+          <span class="badge badge-{{ sc.get(row.zd_status,'secondary') }}">{{ row.zd_status or '?' }}</span>
+        </td>
+        <td class="text-sm text-muted">
+          {% if row.attach_count %}{{ row.attach_count }} 📎{% endif %}
+          {% if row.inline_count %}<span style="margin-left:4px">{{ row.inline_count }} 🖼️</span>{% endif %}
+          {% if not row.attach_count and not row.inline_count %}—{% endif %}
+        </td>
+        <td class="font-semibold text-destructive text-sm">
+          {% set mb = (row.total_size or 0) / 1048576 %}
+          {% if mb >= 1000 %}{{ "%.2f"|format(mb/1024) }} GB{% elif mb >= 1 %}{{ "%.1f"|format(mb) }} MB{% else %}{{ "%.0f"|format((row.total_size or 0)/1024) }} KB{% endif %}
+        </td>
+        <td class="font-mono text-muted text-sm">{{ row.last_seen_at.strftime('%Y-%m-%d %H:%M') if row.last_seen_at else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted text-center" style="padding:24px">No tickets found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set qs = ('&status=' + status_filter if status_filter else '') + ('&q=' + q|urlencode if q else '') + '&sort=' + (sort or 'total_size') + '&order=' + (order or 'desc') %}
+<nav class="pagination">
+  {% if tickets.has_prev %}<a class="page-link" href="?page={{ tickets.prev_num }}{{ qs }}">← Prev</a>{% endif %}
+  {% for pn in tickets.iter_pages() %}
+    {% if pn %}<a class="page-link {{ 'active' if pn == tickets.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
+    {% else %}<span class="page-link disabled">…</span>{% endif %}
+  {% endfor %}
+  {% if tickets.has_next %}<a class="page-link" href="?page={{ tickets.next_num }}{{ qs }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
+
+<div id="refreshStatus" class="mt-3 text-muted text-sm"></div>
+
+<script>
+function triggerRefresh() {
+  const btn = document.getElementById('btnRefresh');
+  const status = document.getElementById('refreshStatus');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Refreshing…'; }
+  status.textContent = 'Starting storage snapshot…';
+  fetch('/api/storage_report/refresh', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      status.textContent = d.message;
+      if (d.success) { setTimeout(()=>location.reload(), 5000); }
+      else if (btn) { btn.disabled=false; btn.innerHTML='Refresh Now'; }
+    }).catch(()=>{ status.textContent='Request failed'; if(btn){btn.disabled=false;btn.innerHTML='Refresh Now';} });
+}
+</script>
+{% endblock %}

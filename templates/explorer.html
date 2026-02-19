@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Zendesk Explorer — z2w{% endblock %}
+{% block page_title %}Zendesk Explorer{% endblock %}
+{% block page_sub %}Browse tickets, files, and storage directly from Zendesk{% endblock %}
+
+{% block full_content %}
+{% if explorer_built %}
+<iframe
+  src="{{ url_for('static', filename='explorer/index.html') }}"
+  class="explorer-frame"
+  style="flex:1;width:100%;border:none;height:calc(100vh - 52px)"
+  title="Zendesk Explorer"
+></iframe>
+{% else %}
+<div class="page-content">
+  <div class="card" style="max-width:520px;margin-top:24px">
+    <div class="card-body" style="padding:32px;text-align:center">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="40" height="40" style="color:var(--muted-foreground);margin-bottom:16px"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <div class="page-title" style="font-size:16px;margin-bottom:8px">Explorer not built yet</div>
+      <p class="text-muted" style="font-size:13px">Run the following command to build the explorer:</p>
+      <pre style="background:var(--muted);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;font-family:monospace;text-align:left;margin-top:12px">cd /opt/z2w/explorer && npm run build</pre>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

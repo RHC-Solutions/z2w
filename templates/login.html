@@ -1,101 +1,85 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Zendesk Offloader Admin</title>
-    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <style>
-        body {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-        .login-container {
-            flex: 1;
-        }
-        footer a {
-            color: #6c757d;
-        }
-        footer a:hover {
-            color: #495057;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — z2w</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: oklch(0.609 0.126 221.7); --primary-fg: oklch(0.985 0.002 247.8);
+      --border: oklch(0.92 0.004 286.3); --input: oklch(0.92 0.004 286.3);
+      --muted-fg: oklch(0.552 0.016 285.9); --bg: oklch(0.985 0.001 286);
+      --card: oklch(1 0 0); --fg: oklch(0.141 0.005 285.9);
+      --success: oklch(0.596 0.145 162.5); --destructive: oklch(0.577 0.245 27.3);
+      --radius: 0.25rem;
+    }
+    body { font-family:'Figtree',ui-sans-serif,system-ui,sans-serif; background:var(--bg); color:var(--fg); min-height:100vh; display:flex; flex-direction:column; -webkit-font-smoothing:antialiased; }
+    .login-wrap { flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
+    .login-card { background:var(--card); border:1px solid var(--border); border-radius:calc(var(--radius)*2); padding:36px; width:100%; max-width:380px; box-shadow:0 8px 32px rgba(0,0,0,0.08); }
+    .login-logo { display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:28px; }
+    .login-logo img { width:40px; height:40px; border-radius:8px; }
+    .login-logo-text { font-size:18px; font-weight:700; }
+    .login-title { font-size:15px; font-weight:600; text-align:center; margin-bottom:20px; }
+    .form-group { margin-bottom:14px; }
+    .form-label { display:block; font-size:13px; font-weight:500; margin-bottom:5px; }
+    .form-control { width:100%; padding:8px 11px; border:1px solid var(--input); border-radius:var(--radius); font-size:13px; font-family:inherit; background:var(--card); color:var(--fg); outline:none; transition:border-color 0.13s, box-shadow 0.13s; }
+    .form-control:focus { border-color:var(--primary); box-shadow:0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent); }
+    .btn { display:flex; align-items:center; justify-content:center; gap:7px; width:100%; padding:9px 14px; border-radius:var(--radius); font-size:13px; font-weight:600; cursor:pointer; border:1px solid transparent; font-family:inherit; text-decoration:none; transition:background 0.13s; }
+    .btn-primary  { background:var(--primary); color:var(--primary-fg); }
+    .btn-primary:hover { background:oklch(0.55 0.126 221.7); }
+    .btn-ms { background:#0078d4; color:#fff; }
+    .btn-ms:hover { background:#006cc1; }
+    .btn-secondary { background:oklch(0.967 0.001 286.4); color:oklch(0.21 0.006 285.9); border-color:var(--border); }
+    .btn-secondary:hover { background:oklch(0.94 0.003 286.4); }
+    .divider { display:flex; align-items:center; gap:10px; margin:16px 0; color:var(--muted-fg); font-size:12px; }
+    .divider::before, .divider::after { content:''; flex:1; height:1px; background:var(--border); }
+    .alert { padding:9px 13px; border-radius:var(--radius); font-size:13px; border:1px solid transparent; margin-bottom:14px; }
+    .alert-danger  { background:color-mix(in oklch, var(--destructive) 9%, transparent); border-color:color-mix(in oklch, var(--destructive) 18%, transparent); color:oklch(0.40 0.245 27.3); }
+    .alert-success { background:color-mix(in oklch, var(--success) 10%, transparent); border-color:color-mix(in oklch, var(--success) 22%, transparent); color:oklch(0.36 0.145 162.5); }
+    footer { padding:20px; text-align:center; font-size:12px; color:var(--muted-fg); border-top:1px solid var(--border); }
+    footer a { color:var(--muted-fg); text-decoration:none; margin:0 8px; }
+    footer a:hover { color:var(--fg); }
+  </style>
 </head>
-<body class="bg-light">
-    <div class="login-container">
-    <div class="container">
-        <div class="row justify-content-center align-items-center" style="min-height: 100vh;">
-            <div class="col-md-4">
-                    <div class="text-center mb-4">
-                        <img src="{{ url_for('static', filename='logo.svg') }}" alt="Logo" class="mb-3" style="width: 64px; height: 64px;">
-                        <h2>Zendesk Offloader</h2>
-                    </div>
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <h3 class="card-title mb-3 text-center">Admin Login</h3>
-                        {% with messages = get_flashed_messages(with_categories=true) %}
-                            {% if messages %}
-                                {% for category, message in messages %}
-                                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-                                        {{ message }}
-                                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                                    </div>
-                                {% endfor %}
-                            {% endif %}
-                        {% endwith %}
-                        
-                        {% if oauth_enabled %}
-                        <div class="mb-4">
-                            <a href="{{ url_for('login_oauth') }}" class="btn btn-primary w-100 mb-3" style="background-color: #0078d4; border-color: #0078d4;">
-                                <i class="bi bi-microsoft"></i> Sign in with Microsoft
-                            </a>
-                            <div class="text-center">
-                                <small class="text-muted">or</small>
-                            </div>
-                            <hr class="my-3">
-                        </div>
-                        {% endif %}
-                        
-                        <form method="POST">
-                            <div class="mb-3">
-                                <label class="form-label">Username</label>
-                                <input type="text" name="username" class="form-control" {% if not oauth_enabled %}autofocus{% endif %} required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <input type="password" name="password" class="form-control" required>
-                            </div>
-                            <button type="submit" class="btn btn-secondary w-100">Login with Password</button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w">
+      <span class="login-logo-text">Zendesk Offloader</span>
     </div>
-    </div>
-    <footer class="bg-light border-top mt-auto py-3">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-12 text-center">
-                    <p class="mb-2 text-muted">
-                        &copy; 2025 RHC Solutions. All rights reserved.
-                    </p>
-                    <p class="mb-0">
-                        <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer" class="text-decoration-none me-3">
-                            <i class="bi bi-telegram"></i> Support
-                        </a>
-                        <a href="{{ url_for('privacy') }}" class="text-decoration-none me-3">Privacy Policy</a>
-                        <a href="{{ url_for('cookies') }}" class="text-decoration-none">Cookie Policy</a>
-                    </p>
-                </div>
-            </div>
-        </div>
-    </footer>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <div class="login-title">Sign in to z2w</div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}
+      {% for cat, msg in messages %}
+      <div class="alert alert-{{ 'danger' if cat == 'error' else cat }}">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}{% endwith %}
+
+    {% if oauth_enabled %}
+    <a href="{{ url_for('login_oauth') }}" class="btn btn-ms mb-3">
+      <svg viewBox="0 0 21 21" width="16" height="16"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>
+      Sign in with Microsoft
+    </a>
+    <div class="divider">or</div>
+    {% endif %}
+
+    <form method="POST">
+      <div class="form-group"><label class="form-label">Username</label><input type="text" name="username" class="form-control" {% if not oauth_enabled %}autofocus{% endif %} required></div>
+      <div class="form-group"><label class="form-label">Password</label><input type="password" name="password" class="form-control" required></div>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+    </form>
+  </div>
+</div>
+<footer>
+  &copy; 2025 RHC Solutions
+  <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+  <a href="{{ url_for('cookies') }}">Cookie Policy</a>
+  <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener">Telegram Support</a>
+</footer>
 </body>
 </html>
-
-

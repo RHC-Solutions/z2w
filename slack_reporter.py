@@ -95,6 +95,59 @@ class SlackReporter:
                 "value": str(summary.get('attachments_deleted', 0)),
                 "short": True
             })
+
+        inlines_up = summary.get('inlines_uploaded', 0)
+        inlines_del = summary.get('inlines_deleted', 0)
+        if inlines_up > 0:
+            fields.append({"title": "Inline Uploaded", "value": str(inlines_up), "short": True})
+        if inlines_del > 0:
+            fields.append({"title": "Inline Deleted", "value": str(inlines_del), "short": True})
+
+        # ── Job offload size (bytes moved this run) ────────────────────────
+        total_job_bytes = sum(
+            detail.get('total_size_bytes', 0)
+            for detail in summary.get('details', [])
+            if isinstance(detail, dict)
+        )
+        if total_job_bytes > 0:
+            if total_job_bytes >= 1024 * 1024 * 1024:
+                job_size_str = f"{total_job_bytes / (1024**3):.2f} GB"
+            elif total_job_bytes >= 1024 * 1024:
+                job_size_str = f"{total_job_bytes / (1024**2):.1f} MB"
+            elif total_job_bytes >= 1024:
+                job_size_str = f"{total_job_bytes / 1024:.1f} KB"
+            else:
+                job_size_str = f"{total_job_bytes:,} bytes"
+            fields.append({
+                "title": "Job Offload Size",
+                "value": job_size_str,
+                "short": True
+            })
+
+        # ── Zendesk Storage in use (from snapshot DB) ─────────────────────
+        try:
+            from database import get_db, ZendeskStorageSnapshot
+            from sqlalchemy import func as _sqlfunc
+            _db = get_db()
+            try:
+                _total = _db.query(_sqlfunc.sum(ZendeskStorageSnapshot.total_size)).scalar() or 0
+                if _total > 0:
+                    if _total >= 1024 * 1024 * 1024:
+                        _zd_size = f"{_total / (1024**3):.2f} GB"
+                    elif _total >= 1024 * 1024:
+                        _zd_size = f"{_total / (1024**2):.1f} MB"
+                    else:
+                        _zd_size = f"{_total / 1024:.1f} KB"
+                    fields.append({
+                        "title": "Zendesk Storage in use",
+                        "value": _zd_size,
+                        "short": True
+                    })
+            finally:
+                _db.close()
+        except Exception:
+            pass
+
         
         # Build attachment
         attachment = {

@@ -80,9 +80,15 @@ class BackupManager:
             parent_dir = self.app_dir.parent
             app_folder_name = self.app_dir.name
             
+            # Set GZIP environment variable to use absolute path
+            env = os.environ.copy()
+            env['GZIP'] = '-9'  # Maximum compression
+            env['PATH'] = '/usr/bin:/bin:/usr/local/bin'  # Ensure gzip is in PATH
+            
             cmd = [
                 '/usr/bin/tar',
-                '-czf',
+                '--use-compress-program=/usr/bin/gzip',
+                '-cf',
                 str(backup_path),
                 '-C',
                 str(parent_dir),
@@ -95,7 +101,8 @@ class BackupManager:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=300,  # 5 minute timeout
+                env=env
             )
             
             if result.returncode != 0:

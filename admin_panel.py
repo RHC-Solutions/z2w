@@ -3,8 +3,8 @@ Admin panel for managing settings and monitoring
 """
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from datetime import datetime
-from sqlalchemy import func
-from database import get_db, Setting, ProcessedTicket, OffloadLog
+from sqlalchemy import func, or_, cast, String, asc, desc
+from database import get_db, Setting, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot
 from scheduler import OffloadScheduler
 from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
@@ -20,6 +20,15 @@ from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+# Custom Jinja2 filters
+import json as _json
+@app.template_filter('fromjson')
+def fromjson_filter(s):
+    try:
+        return _json.loads(s) if s else {}
+    except Exception:
+        return {}
 
 # Global scheduler instance
 scheduler = None
@@ -383,11 +392,16 @@ def index():
         ).with_entities(
             func.sum(ProcessedTicket.attachments_count)
         ).scalar() or 0
-        
+
+        # Ticket cache stats
+        cache_total = db.query(ZendeskTicketCache).count()
+        from sqlalchemy import func as sqlfunc
+        cache_last_sync = db.query(sqlfunc.max(ZendeskTicketCache.cached_at)).scalar()
+
         recent_logs = db.query(OffloadLog).order_by(
             OffloadLog.run_date.desc()
         ).all()
-        
+
         # Get scheduler status
         sched = init_scheduler()
         next_run = None
@@ -395,12 +409,14 @@ def index():
             jobs = sched.scheduler.get_jobs()
             if jobs:
                 next_run = jobs[0].next_run_time
-        
+
         return render_template('dashboard.html',
                              total_processed=total_processed,
                              total_attachments=total_attachments,
                              recent_logs=recent_logs,
-                             next_run=next_run)
+                             next_run=next_run,
+                             cache_total=cache_total,
+                             cache_last_sync=cache_last_sync)
     finally:
         db.close()
 
@@ -427,7 +443,8 @@ def settings():
             # Update settings in database and prepare .env updates
             env_updates = {}
             scheduler_settings_changed = False
-            scheduler_keys = {'SCHEDULER_TIMEZONE', 'SCHEDULER_HOUR', 'SCHEDULER_MINUTE'}
+            scheduler_keys = {'SCHEDULER_TIMEZONE', 'SCHEDULER_HOUR', 'SCHEDULER_MINUTE',
+                              'RECHECK_HOUR', 'CONTINUOUS_OFFLOAD_INTERVAL', 'STORAGE_REPORT_INTERVAL'}
             
             for key, value in request.form.items():
                 # Check if scheduler settings changed
@@ -544,6 +561,9 @@ def settings():
             'SCHEDULER_TIMEZONE': os.getenv('SCHEDULER_TIMEZONE', 'UTC'),
             'SCHEDULER_HOUR': os.getenv('SCHEDULER_HOUR', '0'),
             'SCHEDULER_MINUTE': os.getenv('SCHEDULER_MINUTE', '0'),
+            'RECHECK_HOUR': os.getenv('RECHECK_HOUR', '2'),
+            'CONTINUOUS_OFFLOAD_INTERVAL': os.getenv('CONTINUOUS_OFFLOAD_INTERVAL', '5'),
+            'STORAGE_REPORT_INTERVAL': os.getenv('STORAGE_REPORT_INTERVAL', '60'),
         }
         
         # Merge with database settings (database takes priority)
@@ -604,12 +624,43 @@ def tickets():
                 pass
         
         page = request.args.get('page', 1, type=int)
+        search_query = (request.args.get('q', '') or '').strip()
+        status_filter = (request.args.get('status', '') or '').strip()
+        sort_by = request.args.get('sort', 'processed_at')
+        sort_order = request.args.get('order', 'desc')
         per_page = 50
-        
+
+        # Allowed sort columns
+        sort_columns = {
+            'ticket_id': ProcessedTicket.ticket_id,
+            'processed_at': ProcessedTicket.processed_at,
+            'attachments_count': ProcessedTicket.attachments_count,
+            'status': ProcessedTicket.status,
+        }
+        sort_col = sort_columns.get(sort_by, ProcessedTicket.processed_at)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        # Build query with optional search filter
+        tickets_base_query = db.query(ProcessedTicket)
+        if search_query:
+            like_pattern = f"%{search_query}%"
+            tickets_base_query = tickets_base_query.filter(
+                or_(
+                    cast(ProcessedTicket.ticket_id, String).like(like_pattern),
+                    ProcessedTicket.status.like(like_pattern),
+                    ProcessedTicket.error_message.like(like_pattern),
+                    ProcessedTicket.wasabi_files.like(like_pattern)
+                )
+            )
+        if status_filter:
+            tickets_base_query = tickets_base_query.filter(
+                ProcessedTicket.status == status_filter
+            )
+
         # Manual pagination
-        total = db.query(ProcessedTicket).count()
-        tickets_query = db.query(ProcessedTicket).order_by(
-            ProcessedTicket.processed_at.desc()
+        total = tickets_base_query.count()
+        tickets_query = tickets_base_query.order_by(
+            order_fn(sort_col)
         ).offset((page - 1) * per_page).limit(per_page).all()
         
         # Generate URLs for each ticket's files
@@ -661,9 +712,306 @@ def tickets():
         
         tickets = Pagination(page, per_page, total, tickets_query)
         
-        return render_template('tickets.html', tickets=tickets)
+        return render_template('tickets.html', tickets=tickets, q=search_query,
+                               status_filter=status_filter, sort=sort_by, order=sort_order)
     finally:
         db.close()
+
+@app.route('/storage')
+@login_required
+def storage_report():
+    """Zendesk storage usage report — read from zendesk_storage_snapshot cache table"""
+    db = get_db()
+    try:
+        page = request.args.get('page', 1, type=int)
+        search_query = (request.args.get('q', '') or '').strip()
+        sort_by = request.args.get('sort', 'size')
+        sort_order = request.args.get('order', 'desc')
+        status_filter = (request.args.get('status', '') or '').strip()
+        per_page = 50
+
+        from config import ZENDESK_SUBDOMAIN, reload_config, STORAGE_REPORT_INTERVAL
+        reload_config()
+        subdomain_row = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
+        subdomain = (subdomain_row.value if subdomain_row else None) or ZENDESK_SUBDOMAIN or 'app'
+
+        sort_map = {
+            'ticket_id': ZendeskStorageSnapshot.ticket_id,
+            'size':      ZendeskStorageSnapshot.total_size,
+            'files':     ZendeskStorageSnapshot.attach_count,
+            'updated':   ZendeskStorageSnapshot.updated_at,
+        }
+        sort_col = sort_map.get(sort_by, ZendeskStorageSnapshot.total_size)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        base_q = db.query(ZendeskStorageSnapshot).filter(
+            ZendeskStorageSnapshot.total_size > 0
+        )
+        if search_query:
+            lp = f"%{search_query}%"
+            base_q = base_q.filter(
+                or_(
+                    cast(ZendeskStorageSnapshot.ticket_id, String).like(lp),
+                    ZendeskStorageSnapshot.subject.like(lp),
+                    ZendeskStorageSnapshot.zd_status.like(lp),
+                )
+            )
+        if status_filter:
+            base_q = base_q.filter(ZendeskStorageSnapshot.zd_status == status_filter)
+
+        from sqlalchemy import func as sqlfunc
+        totals = db.query(
+            sqlfunc.count(ZendeskStorageSnapshot.id).label('count'),
+            sqlfunc.sum(ZendeskStorageSnapshot.attach_count + ZendeskStorageSnapshot.inline_count).label('total_files'),
+            sqlfunc.sum(ZendeskStorageSnapshot.total_size).label('total_bytes'),
+        ).filter(ZendeskStorageSnapshot.total_size > 0).one()
+
+        # Last update timestamp
+        last_updated = db.query(sqlfunc.max(ZendeskStorageSnapshot.updated_at)).scalar()
+
+        # Next scheduled run
+        next_run = None
+        try:
+            sched = init_scheduler()
+            if sched.scheduler.running:
+                job = sched.scheduler.get_job('storage_snapshot')
+                if job and job.next_run_time:
+                    next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M UTC')
+        except Exception:
+            pass
+
+        total_rows = base_q.count()
+        rows = (
+            base_q.order_by(order_fn(sort_col))
+                  .offset((page - 1) * per_page)
+                  .limit(per_page)
+                  .all()
+        )
+
+        tickets_data = []
+        for snap in rows:
+            tickets_data.append({
+                'ticket_id':  snap.ticket_id,
+                'subject':    snap.subject or '',
+                'zd_status':  snap.zd_status or '',
+                'files':      (snap.attach_count or 0) + (snap.inline_count or 0),
+                'attach':     snap.attach_count or 0,
+                'inline':     snap.inline_count or 0,
+                'size_bytes': snap.total_size or 0,
+                'updated_at': snap.updated_at,
+                'ticket_url': f'https://{subdomain}.zendesk.com/agent/tickets/{snap.ticket_id}',
+            })
+
+        # Status counts for filter tabs
+        status_counts = {}
+        for row in db.query(ZendeskStorageSnapshot.zd_status, sqlfunc.count(ZendeskStorageSnapshot.id))\
+                     .filter(ZendeskStorageSnapshot.total_size > 0)\
+                     .group_by(ZendeskStorageSnapshot.zd_status).all():
+            status_counts[row[0] or ''] = row[1]
+
+        class Pagination:
+            def __init__(self, page, per_page, total):
+                self.page = page; self.per_page = per_page; self.total = total
+                self.pages = max(1, (total + per_page - 1) // per_page)
+                self.has_prev = page > 1
+                self.has_next = page < self.pages
+                self.prev_num = page - 1 if self.has_prev else None
+                self.next_num = page + 1 if self.has_next else None
+            def iter_pages(self, left_edge=2, right_edge=2, left_current=2, right_current=2):
+                for num in range(1, self.pages + 1):
+                    if (num <= left_edge or
+                            (num > self.page - left_current - 1 and num < self.page + right_current) or
+                            num > self.pages - right_edge):
+                        yield num
+
+        is_empty = (db.query(ZendeskStorageSnapshot).count() == 0)
+
+        return render_template(
+            'storage.html',
+            tickets=tickets_data,
+            pagination=Pagination(page, per_page, total_rows),
+            q=search_query,
+            sort=sort_by,
+            order=sort_order,
+            status_filter=status_filter,
+            status_counts=status_counts,
+            total_tickets=totals.count or 0,
+            total_files=totals.total_files or 0,
+            total_bytes=totals.total_bytes or 0,
+            last_updated=last_updated,
+            next_run=next_run,
+            is_empty=is_empty,
+            storage_interval=STORAGE_REPORT_INTERVAL,
+        )
+    finally:
+        db.close()
+
+
+@app.route('/api/storage_report/refresh', methods=['POST'])
+@login_required
+def storage_report_refresh():
+    """Manually trigger a storage snapshot refresh in the background"""
+    try:
+        sched = init_scheduler()
+        import threading
+        t = threading.Thread(target=sched.storage_snapshot_job, daemon=True, name='storage-snap-manual')
+        t.start()
+        return jsonify({'success': True, 'message': 'Storage snapshot refresh started in background.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/storage_report')
+@login_required
+def storage_report_json():
+    """JSON version of the storage report for the React Explorer frontend"""
+    db = get_db()
+    try:
+        from sqlalchemy import func as sqlfunc
+        from config import ZENDESK_SUBDOMAIN
+
+        rows = db.query(ZendeskStorageSnapshot).filter(
+            ZendeskStorageSnapshot.total_size > 0
+        ).order_by(ZendeskStorageSnapshot.total_size.desc()).all()
+
+        totals = db.query(
+            sqlfunc.count(ZendeskStorageSnapshot.id).label('count'),
+            sqlfunc.sum(ZendeskStorageSnapshot.attach_count + ZendeskStorageSnapshot.inline_count).label('total_files'),
+            sqlfunc.sum(ZendeskStorageSnapshot.total_size).label('total_bytes'),
+        ).filter(ZendeskStorageSnapshot.total_size > 0).one()
+
+        by_status = {}
+        for row in db.query(
+            ZendeskStorageSnapshot.zd_status,
+            sqlfunc.count(ZendeskStorageSnapshot.id),
+            sqlfunc.sum(ZendeskStorageSnapshot.attach_count + ZendeskStorageSnapshot.inline_count),
+            sqlfunc.sum(ZendeskStorageSnapshot.total_size),
+        ).filter(ZendeskStorageSnapshot.total_size > 0).group_by(ZendeskStorageSnapshot.zd_status).all():
+            by_status[row[0] or ''] = {'tickets': row[1], 'files': row[2] or 0, 'bytes': row[3] or 0}
+
+        last_updated = db.query(sqlfunc.max(ZendeskStorageSnapshot.updated_at)).scalar()
+        next_run = None
+        try:
+            sched = init_scheduler()
+            if sched.scheduler.running:
+                job = sched.scheduler.get_job('storage_snapshot')
+                if job and job.next_run_time:
+                    next_run = job.next_run_time.isoformat()
+        except Exception:
+            pass
+
+        is_empty = (db.query(ZendeskStorageSnapshot).count() == 0)
+
+        return jsonify({
+            'rows': [{
+                'ticket_id': s.ticket_id,
+                'subject': s.subject or '',
+                'zd_status': s.zd_status or '',
+                'attach_count': s.attach_count or 0,
+                'inline_count': s.inline_count or 0,
+                'total_size': s.total_size or 0,
+                'last_seen_at': s.last_seen_at.isoformat() if s.last_seen_at else None,
+            } for s in rows],
+            'summary': {
+                'total_tickets': totals.count or 0,
+                'total_files': int(totals.total_files or 0),
+                'total_bytes': int(totals.total_bytes or 0),
+                'by_status': by_status,
+            },
+            'last_updated': last_updated.isoformat() if last_updated else None,
+            'next_run': next_run,
+            'is_empty': is_empty,
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/wasabi_stats')
+@login_required
+def wasabi_stats_json():
+    """Return Wasabi storage stats as JSON for the Explorer frontend"""
+    try:
+        from config import (reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY,
+                            WASABI_SECRET_KEY, WASABI_BUCKET_NAME)
+        reload_config()
+        db = get_db()
+        try:
+            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
+        finally:
+            db.close()
+        endpoint = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
+        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+        if not all([endpoint, access_key, secret_key, bucket_name]):
+            return jsonify({'error': 'Wasabi not configured'}), 503
+        if not endpoint.startswith('http'):
+            endpoint = f'https://{endpoint}'
+        wasabi = WasabiClient(endpoint=endpoint, access_key=access_key,
+                              secret_key=secret_key, bucket_name=bucket_name)
+        stats = wasabi.get_storage_stats()
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/explorer/')
+@login_required
+def explorer_app(subpath=''):
+    """Render the Zendesk Explorer inside the unified Flask shell"""
+    import os as _os
+    static_dir = _os.path.join(_os.path.dirname(__file__), 'static', 'explorer', 'app')
+    built = _os.path.isfile(_os.path.join(static_dir, 'index.html'))
+    return render_template('explorer.html', explorer_built=built)
+
+
+@app.route('/explorer/app/')
+@app.route('/explorer/app/<path:subpath>')
+@login_required
+def explorer_static(subpath=''):
+    """Serve the Next.js static files (assets + HTML) for the embedded explorer"""
+    import os as _os
+    from flask import send_from_directory, abort
+    static_dir = _os.path.join(_os.path.dirname(__file__), 'static', 'explorer', 'app')
+    if not _os.path.isdir(static_dir):
+        return abort(404)
+    candidate = _os.path.join(static_dir, subpath) if subpath else None
+    if candidate and _os.path.isfile(candidate):
+        return send_from_directory(static_dir, subpath)
+    root_index = _os.path.join(static_dir, 'index.html')
+    if _os.path.isfile(root_index):
+        return send_from_directory(static_dir, 'index.html')
+    return abort(404)
+
+
+@app.route('/explorer/api/proxy')
+@login_required
+def explorer_zendesk_proxy():
+    """Server-side proxy for Zendesk API calls from the React Explorer.
+    Needed because Next.js API routes are dropped in static export mode."""
+    from flask import Response
+    subdomain = request.args.get('subdomain', '').strip()
+    path = request.args.get('path', '').strip()
+    if not subdomain or not path:
+        return jsonify({'error': 'Missing subdomain or path'}), 400
+    auth = request.headers.get('Authorization', '')
+    if not auth:
+        return jsonify({'error': 'Missing Authorization header'}), 401
+    target = f"https://{subdomain}.zendesk.com/api/v2{path}"
+    try:
+        resp = requests.get(
+            target,
+            headers={'Authorization': auth, 'Content-Type': 'application/json'},
+            timeout=30,
+        )
+        return Response(
+            resp.content,
+            status=resp.status_code,
+            content_type=resp.headers.get('Content-Type', 'application/json'),
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
 
 @app.route('/logs')
 @login_required
@@ -912,6 +1260,193 @@ def backup_now():
         return jsonify({'success': True, 'message': 'Backup job started'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/recheck_all', methods=['POST'])
+@login_required
+def recheck_all():
+    """Scan all Zendesk tickets and process any that still have attachments"""
+    try:
+        sched = init_scheduler()
+        import threading
+        t = threading.Thread(target=sched.run_recheck_all_now, daemon=True)
+        t.start()
+        return jsonify({'success': True, 'message': 'Recheck-all job started in background.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/sync_ticket_cache', methods=['POST'])
+@login_required
+def sync_ticket_cache():
+    """Manually trigger a full Zendesk ticket cache sync in the background."""
+    try:
+        sched = init_scheduler()
+        import threading
+        def _run():
+            try:
+                sched.offloader.sync_ticket_cache()
+            except Exception as e:
+                logger.error(f"Manual cache sync failed: {e}", exc_info=True)
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return jsonify({'success': True, 'message': 'Ticket cache sync started in background.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/ticket_cache_stats', methods=['GET'])
+@login_required
+def ticket_cache_stats():
+    """Return current ticket cache statistics."""
+    db = get_db()
+    try:
+        total = db.query(ZendeskTicketCache).count()
+        from sqlalchemy import func as sqlfunc
+        last_sync = db.query(sqlfunc.max(ZendeskTicketCache.cached_at)).scalar()
+        return jsonify({
+            'total': total,
+            'last_sync': last_sync.isoformat() if last_sync else None,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
+    finally:
+        db.close()
+
+@app.route('/api/skipped_tickets', methods=['GET'])
+@login_required
+def skipped_tickets():
+    """
+    Return tickets that were recorded with 0 attachments uploaded AND have an error_message,
+    meaning they were attempted but failed / skipped. These are candidates for manual re-offload.
+    Query params:
+        page  (int, default 1)
+        limit (int, default 200)
+    """
+    db = get_db()
+    try:
+        page  = max(1, int(request.args.get('page',  1)))
+        limit = min(500, max(1, int(request.args.get('limit', 200))))
+        offset = (page - 1) * limit
+
+        base_q = db.query(ProcessedTicket).filter(
+            ProcessedTicket.attachments_count == 0,
+            ProcessedTicket.error_message != None,
+        )
+        total = base_q.count()
+        rows  = base_q.order_by(ProcessedTicket.ticket_id.asc()).offset(offset).limit(limit).all()
+
+        tickets = [
+            {
+                'ticket_id':    r.ticket_id,
+                'processed_at': r.processed_at.isoformat() if r.processed_at else None,
+                'error_message': r.error_message,
+                'status':        r.status,
+            }
+            for r in rows
+        ]
+        return jsonify({'tickets': tickets, 'total': total, 'page': page, 'limit': limit})
+    except Exception as e:
+        return jsonify({'error': str(e)})
+    finally:
+        db.close()
+
+@app.route('/api/recheck_status', methods=['GET'])
+@login_required
+def recheck_status():
+    """Return live recheck-all status + last summary for polling"""
+    try:
+        sched = init_scheduler()
+        status = sched.get_recheck_status()
+        summary = status.get('summary')
+        # Convert datetime objects to strings for JSON serialisation
+        if summary:
+            if hasattr(summary.get('run_date'), 'isoformat'):
+                summary = dict(summary)
+                summary['run_date'] = summary['run_date'].isoformat()
+            # details may contain datetime objects too; strip them for JSON safety
+            details_out = []
+            for d in summary.get('details', []):
+                if isinstance(d, dict):
+                    d2 = {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in d.items()}
+                    details_out.append(d2)
+            summary['details'] = details_out
+        return jsonify({
+            'running': status['running'],
+            'started_at': status['started_at'],
+            'progress': status.get('progress', {}),
+            'summary': summary,
+        })
+    except Exception as e:
+        return jsonify({'running': False, 'started_at': None, 'progress': {}, 'summary': None, 'error': str(e)})
+
+@app.route('/api/offload_ticket/<int:ticket_id>', methods=['POST'])
+@login_required
+def offload_ticket(ticket_id):
+    """Re-process a single ticket — upload any remaining attachments to Wasabi."""
+    try:
+        sched = init_scheduler()
+        # Block if a global job is running to avoid conflicts
+        if sched._job_running or getattr(sched, '_recheck_running', False):
+            return jsonify({'success': False, 'message': 'A job is already running — please wait.'})
+
+        result = sched.offloader.process_ticket(ticket_id)
+        uploaded = result.get('attachments_uploaded', 0)
+        errors = result.get('errors', [])
+        status_msg = f"{uploaded} file(s) uploaded"
+        if errors:
+            status_msg += f", {len(errors)} error(s)"
+        return jsonify({
+            'success': True,
+            'ticket_id': ticket_id,
+            'attachments_uploaded': uploaded,
+            'errors': errors,
+            'message': status_msg,
+        })
+    except Exception as e:
+        logger.error(f"Error offloading ticket {ticket_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/recheck_report')
+@login_required
+def recheck_report():
+    """Dedicated page showing live progress and the last completed recheck-all report"""
+    import json
+    sched = init_scheduler()
+    status = sched.get_recheck_status()
+    running = status['running']
+    summary = status.get('summary')
+
+    # Get Zendesk subdomain for ticket links
+    from config import reload_config, ZENDESK_SUBDOMAIN
+    reload_config()
+    db = get_db()
+    try:
+        sd_setting = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
+        zendesk_subdomain = (sd_setting.value if sd_setting else None) or ZENDESK_SUBDOMAIN or ''
+
+        # Also try to load the most recent recheck_all OffloadLog from DB as fallback
+        logs = db.query(OffloadLog).order_by(OffloadLog.run_date.desc()).all()
+        last_log = None
+        for log in logs:
+            if log.details:
+                try:
+                    d = json.loads(log.details)
+                    if isinstance(d, dict) and d.get('run_mode') == 'recheck_all':
+                        last_log = log
+                        last_log._parsed = d
+                        break
+                except Exception:
+                    pass
+    finally:
+        db.close()
+
+    return render_template(
+        'recheck_report.html',
+        running=running,
+        started_at=status.get('started_at'),
+        progress=status.get('progress', {}),
+        summary=summary,
+        last_log=last_log,
+        zendesk_subdomain=zendesk_subdomain,
+    )
 
 @app.route('/api/scheduler/start', methods=['POST'])
 @login_required

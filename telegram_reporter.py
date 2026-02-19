@@ -99,10 +99,10 @@ class TelegramReporter:
             run_date_str = run_date
         else:
             run_date_str = run_date.strftime('%Y-%m-%d %H:%M:%S') if hasattr(run_date, 'strftime') else str(run_date)
-        
+
         # Determine status emoji
         status_emoji = "✅" if len(summary.get('errors', [])) == 0 else "⚠️"
-        
+
         message = f"""
 {status_emoji} <b>Zendesk to Wasabi B2 Offload Report</b>
 
@@ -114,9 +114,97 @@ class TelegramReporter:
 • Attachments Uploaded: {summary['attachments_uploaded']}
 • Errors: {len(summary.get('errors', []))}
 """
-        
+
         if summary.get('attachments_deleted', 0) > 0:
             message += f"• Attachments Deleted: {summary.get('attachments_deleted', 0)}\n"
+
+        inlines_up = summary.get('inlines_uploaded', 0)
+        inlines_del = summary.get('inlines_deleted', 0)
+        if inlines_up > 0 or inlines_del > 0:
+            message += f"• Inline Uploaded: {inlines_up}\n"
+            if inlines_del > 0:
+                message += f"• Inline Deleted: {inlines_del}\n"
+
+        # ── Job offload size (bytes moved this run) ────────────────────────
+        total_job_bytes = sum(
+            detail.get('total_size_bytes', 0)
+            for detail in summary.get('details', [])
+            if isinstance(detail, dict)
+        )
+        if total_job_bytes > 0:
+            if total_job_bytes >= 1024 * 1024 * 1024:
+                job_size_str = f"{total_job_bytes / (1024**3):.2f} GB"
+            elif total_job_bytes >= 1024 * 1024:
+                job_size_str = f"{total_job_bytes / (1024**2):.1f} MB"
+            elif total_job_bytes >= 1024:
+                job_size_str = f"{total_job_bytes / 1024:.1f} KB"
+            else:
+                job_size_str = f"{total_job_bytes:,} bytes"
+            message += f"• Job Offload Size: {job_size_str}\n"
+
+        # ── Zendesk Storage in use (from snapshot DB) ─────────────────────
+        try:
+            from database import get_db, ZendeskStorageSnapshot
+            from sqlalchemy import func as _sqlfunc
+            _db = get_db()
+            try:
+                _total = _db.query(_sqlfunc.sum(ZendeskStorageSnapshot.total_size)).scalar() or 0
+                if _total > 0:
+                    if _total >= 1024 * 1024 * 1024:
+                        _zd_size = f"{_total / (1024**3):.2f} GB"
+                    elif _total >= 1024 * 1024:
+                        _zd_size = f"{_total / (1024**2):.1f} MB"
+                    else:
+                        _zd_size = f"{_total / 1024:.1f} KB"
+                    message += f"• Zendesk Storage in use: {_zd_size}\n"
+            finally:
+                _db.close()
+        except Exception:
+            pass
+
+        # ── Wasabi storage stats ──────────────────────────────────────────
+        ws = summary.get('wasabi_storage') or {}
+        if ws and not ws.get('error'):
+            obj_count = ws.get('object_count', 0)
+            total_gb = ws.get('total_gb', 0.0)
+            total_mb = ws.get('total_mb', 0.0)
+            if total_gb >= 1.0:
+                size_str = f"{total_gb:.2f} GB"
+            else:
+                size_str = f"{total_mb:.1f} MB"
+            message += f"\n☁️ <b>Wasabi Storage:</b>\n"
+            message += f"• Objects: {obj_count:,}\n"
+            message += f"• Used: {size_str}\n"
+        elif ws.get('error'):
+            message += f"\n☁️ <b>Wasabi Storage:</b> ⚠️ Could not fetch ({ws['error'][:80]})\n"
+
+        # ── Zendesk storage stats (from local DB) ─────────────────────────
+        zs = summary.get('zendesk_storage') or {}
+        if zs and not zs.get('error'):
+            freed_gb = zs.get('offloaded_gb', 0.0)
+            freed_mb = zs.get('offloaded_mb', 0.0)
+            if freed_gb >= 1.0:
+                freed_str = f"{freed_gb:.2f} GB"
+            elif freed_mb >= 0.1:
+                freed_str = f"{freed_mb:.1f} MB"
+            else:
+                freed_str = f"{zs.get('offloaded_bytes', 0):,} bytes"
+            tickets_tracked = zs.get('tickets_with_sizes', 0)
+            tickets_total = zs.get('tickets_with_files', 0)
+            message += f"\n📁 <b>Zendesk Storage Freed:</b>\n"
+            message += f"• Offloaded to Wasabi: {freed_str}\n"
+            message += f"• Tickets tracked: {tickets_tracked:,}"
+            if tickets_total > tickets_tracked:
+                message += f" / {tickets_total:,} with files"
+            message += "\n"
+        elif zs.get('error'):
+            message += f"\n📁 <b>Zendesk Storage:</b> ⚠️ Stats unavailable\n"
+
+        # ── Ticket cache sync stats ───────────────────────────────────────
+        cs = summary.get('cache_stats') or {}
+        if cs.get('fetched'):
+            message += f"\n🗄️ <b>Ticket Cache:</b> {cs['fetched']:,} synced " \
+                       f"(+{cs.get('inserted', 0)} new, ↻{cs.get('updated', 0)} updated)\n"
         
         if summary.get('errors'):
             message += "\n❌ <b>Errors:</b>\n"

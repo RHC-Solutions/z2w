@@ -1,120 +1,328 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Zendesk Offloader Admin{% endblock %}</title>
-    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <style>
-        body {
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-        .container-fluid {
-            flex: 1;
-        }
-        .sidebar {
-            min-height: 100vh;
-            background-color: #343a40;
-        }
-        .sidebar .nav-link {
-            color: rgba(255,255,255,0.8);
-        }
-        .sidebar .nav-link:hover {
-            color: #fff;
-        }
-        .sidebar .nav-link.active {
-            color: #fff;
-            background-color: #495057;
-        }
-        footer a {
-            color: #6c757d;
-        }
-        footer a:hover {
-            color: #495057;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}z2w — Zendesk Offloader{% endblock %}</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --background: oklch(1 0 0);
+      --foreground: oklch(0.141 0.005 285.9);
+      --card: oklch(1 0 0);
+      --border: oklch(0.92 0.004 286.3);
+      --input: oklch(0.92 0.004 286.3);
+      --ring: oklch(0.609 0.126 221.7);
+      --primary: oklch(0.609 0.126 221.7);
+      --primary-foreground: oklch(0.985 0.002 247.8);
+      --secondary: oklch(0.967 0.001 286.4);
+      --secondary-foreground: oklch(0.21 0.006 285.9);
+      --muted: oklch(0.967 0.001 286.4);
+      --muted-foreground: oklch(0.552 0.016 285.9);
+      --accent: oklch(0.967 0.001 286.4);
+      --destructive: oklch(0.577 0.245 27.3);
+      --destructive-foreground: oklch(0.985 0 0);
+      --success: oklch(0.596 0.145 162.5);
+      --warning: oklch(0.769 0.188 70.1);
+      --radius: 0.25rem;
+      --sidebar: oklch(0.97 0.006 221.7);
+      --sidebar-foreground: oklch(0.141 0.005 285.9);
+      --sidebar-border: oklch(0.90 0.010 221.7);
+      --sidebar-primary: oklch(0.609 0.126 221.7);
+      --sidebar-primary-foreground: oklch(0.985 0.002 247.8);
+      --sidebar-accent: oklch(0.93 0.015 221.7);
+      --sidebar-accent-foreground: oklch(0.21 0.006 285.9);
+    }
+    html, body { height: 100%; font-family: 'Figtree', ui-sans-serif, system-ui, sans-serif; font-size: 14px; background: var(--background); color: var(--foreground); -webkit-font-smoothing: antialiased; }
+    .app-shell { display: flex; height: 100vh; overflow: hidden; }
+    /* Sidebar */
+    .sidebar { width: 220px; min-width: 220px; display: flex; flex-direction: column; background: var(--sidebar); border-right: 1px solid var(--sidebar-border); transition: width 0.2s, min-width 0.2s; overflow: hidden; }
+    .sidebar.collapsed { width: 52px; min-width: 52px; }
+    .sidebar-header { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--sidebar-border); min-height: 52px; }
+    .sidebar-logo { width: 26px; height: 26px; border-radius: 5px; flex-shrink: 0; }
+    .sidebar-title { font-size: 13px; font-weight: 700; color: var(--sidebar-foreground); white-space: nowrap; overflow: hidden; }
+    .sidebar-subtitle { font-size: 11px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; }
+    .sidebar-user { padding: 7px 12px; font-size: 11px; color: var(--muted-foreground); display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--sidebar-border); overflow: hidden; }
+    .sidebar-user span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar-nav { flex: 1; padding: 8px 5px; overflow-y: auto; }
+    .nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: var(--sidebar-foreground); text-decoration: none; transition: background 0.13s, color 0.13s; white-space: nowrap; overflow: hidden; cursor: pointer; }
+    .nav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
+    .nav-item span { overflow: hidden; text-overflow: ellipsis; }
+    .nav-item:hover { background: var(--sidebar-accent); color: var(--sidebar-accent-foreground); }
+    .nav-item.active { background: var(--sidebar-primary); color: var(--sidebar-primary-foreground); font-weight: 600; }
+    .nav-item.active:hover { background: var(--sidebar-primary); }
+    .nav-section { padding: 10px 9px 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; }
+    .nav-divider { height: 1px; background: var(--sidebar-border); margin: 5px 0; }
+    .sidebar-footer { padding: 6px 5px; border-top: 1px solid var(--sidebar-border); }
+    .collapse-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 6px 9px; border: none; background: transparent; border-radius: var(--radius); font-size: 12px; font-weight: 500; color: var(--muted-foreground); cursor: pointer; transition: background 0.13s; white-space: nowrap; font-family: inherit; }
+    .collapse-btn:hover { background: var(--sidebar-accent); color: var(--sidebar-accent-foreground); }
+    /* Hide labels when collapsed */
+    .sidebar.collapsed .sidebar-title,
+    .sidebar.collapsed .sidebar-subtitle,
+    .sidebar.collapsed .sidebar-user,
+    .sidebar.collapsed .nav-item span,
+    .sidebar.collapsed .nav-section,
+    .sidebar.collapsed .collapse-label { display: none; }
+    .sidebar.collapsed .nav-item { justify-content: center; padding: 7px 0; }
+    .sidebar.collapsed .sidebar-header { justify-content: center; }
+    .sidebar.collapsed .collapse-btn { justify-content: center; }
+    /* Main */
+    .main-area { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; min-height: 52px; border-bottom: 1px solid var(--border); background: var(--card); flex-shrink: 0; gap: 12px; }
+    .topbar-left .topbar-title { font-size: 15px; font-weight: 600; }
+    .topbar-left .topbar-sub { font-size: 12px; color: var(--muted-foreground); }
+    .topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .page-content { flex: 1; overflow-y: auto; padding: 22px 24px; }
+    /* Explorer frame mode */
+    .frame-mode { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .explorer-frame { flex: 1; width: 100%; border: none; }
+    /* Cards */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.5); overflow: hidden; }
+    .card-header { padding: 13px 16px 10px; border-bottom: 1px solid var(--border); }
+    .card-title { font-size: 14px; font-weight: 600; }
+    .card-desc { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; }
+    .card-body { padding: 16px; }
+    /* Stat grid */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius)*1.5); padding: 14px 16px; }
+    .stat-label { font-size: 11px; font-weight: 500; color: var(--muted-foreground); margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+    .stat-label svg { width: 12px; height: 12px; }
+    .stat-value { font-size: 22px; font-weight: 700; }
+    .stat-sub { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+    .primary  { --val-color: var(--primary); } .success { --val-color: var(--success); }
+    .danger   { --val-color: var(--destructive); } .warning { --val-color: var(--warning); }
+    .stat-card.primary .stat-value { color: var(--primary); }
+    .stat-card.success .stat-value { color: var(--success); }
+    .stat-card.danger  .stat-value { color: var(--destructive); }
+    .stat-card.warning .stat-value { color: var(--warning); }
+    /* Buttons */
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px; border-radius: var(--radius); font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; transition: background 0.13s, opacity 0.13s; text-decoration: none; font-family: inherit; white-space: nowrap; line-height: 1.4; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .btn-primary    { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+    .btn-primary:hover { background: oklch(0.55 0.126 221.7); border-color: oklch(0.55 0.126 221.7); }
+    .btn-secondary  { background: var(--secondary); color: var(--secondary-foreground); border-color: var(--border); }
+    .btn-secondary:hover { background: oklch(0.94 0.003 286.4); }
+    .btn-destructive { background: var(--destructive); color: var(--destructive-foreground); border-color: var(--destructive); }
+    .btn-destructive:hover { background: oklch(0.52 0.245 27.3); }
+    .btn-outline    { background: transparent; color: var(--foreground); border-color: var(--border); }
+    .btn-outline:hover { background: var(--accent); }
+    .btn-ghost      { background: transparent; color: var(--muted-foreground); border-color: transparent; }
+    .btn-ghost:hover { background: var(--accent); color: var(--foreground); }
+    .btn-warning    { background: oklch(0.769 0.188 70.1); color: #fff; border-color: oklch(0.769 0.188 70.1); }
+    .btn-warning:hover { background: oklch(0.7 0.188 70.1); }
+    .btn-success    { background: var(--success); color: #fff; border-color: var(--success); }
+    .btn-success:hover { background: oklch(0.53 0.145 162.5); }
+    .btn-info       { background: oklch(0.609 0.126 221.7); color: #fff; border-color: oklch(0.609 0.126 221.7); }
+    .btn-sm  { padding: 4px 10px; font-size: 12px; }
+    .btn-xs  { padding: 2px 7px;  font-size: 11px; }
+    /* Badges */
+    .badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+    .badge-primary   { background: color-mix(in oklch, var(--primary) 15%, transparent); color: oklch(0.42 0.126 221.7); }
+    .badge-success   { background: color-mix(in oklch, var(--success) 15%, transparent); color: oklch(0.38 0.145 162.5); }
+    .badge-warning   { background: color-mix(in oklch, var(--warning) 18%, transparent); color: oklch(0.48 0.188 70.1); }
+    .badge-danger    { background: color-mix(in oklch, var(--destructive) 14%, transparent); color: oklch(0.42 0.245 27.3); }
+    .badge-secondary { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
+    .badge-muted     { background: var(--muted); color: var(--muted-foreground); }
+    /* Tables */
+    .table-wrap { border: 1px solid var(--border); border-radius: calc(var(--radius)*1.5); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { border-bottom: 1px solid var(--border); }
+    th { padding: 8px 12px; text-align: left; font-size: 12px; font-weight: 600; color: var(--muted-foreground); background: var(--muted); white-space: nowrap; }
+    th a { color: inherit; text-decoration: none; }
+    th a:hover { color: var(--foreground); }
+    td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: color-mix(in oklch, var(--muted) 60%, transparent); }
+    /* Forms */
+    .form-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; }
+    .form-control, .form-select { width: 100%; padding: 7px 10px; border: 1px solid var(--input); border-radius: var(--radius); font-size: 13px; font-family: inherit; background: var(--background); color: var(--foreground); outline: none; transition: border-color 0.13s, box-shadow 0.13s; }
+    .form-control:focus, .form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent); }
+    .form-group { margin-bottom: 14px; }
+    .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    /* Alerts */
+    .alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; border: 1px solid transparent; margin-bottom: 14px; display: flex; align-items: flex-start; gap: 8px; }
+    .alert svg { flex-shrink: 0; margin-top: 1px; }
+    .alert-success { background: color-mix(in oklch, var(--success) 10%, transparent); border-color: color-mix(in oklch, var(--success) 22%, transparent); color: oklch(0.36 0.145 162.5); }
+    .alert-danger  { background: color-mix(in oklch, var(--destructive) 9%, transparent); border-color: color-mix(in oklch, var(--destructive) 18%, transparent); color: oklch(0.40 0.245 27.3); }
+    .alert-warning { background: color-mix(in oklch, var(--warning) 11%, transparent); border-color: color-mix(in oklch, var(--warning) 20%, transparent); color: oklch(0.44 0.188 70.1); }
+    .alert-info    { background: color-mix(in oklch, var(--primary) 10%, transparent); border-color: color-mix(in oklch, var(--primary) 18%, transparent); color: oklch(0.40 0.126 221.7); }
+    /* Tabs */
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+    .tab-btn { padding: 7px 14px; font-size: 13px; font-weight: 500; border: none; background: transparent; color: var(--muted-foreground); cursor: pointer; border-bottom: 2px solid transparent; transition: color 0.13s, border-color 0.13s; font-family: inherit; }
+    .tab-btn:hover { color: var(--foreground); }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+    /* Pagination */
+    .pagination { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 16px; }
+    .page-link { padding: 5px 10px; border-radius: var(--radius); font-size: 13px; text-decoration: none; color: var(--foreground); border: 1px solid var(--border); transition: background 0.13s; }
+    .page-link:hover { background: var(--accent); }
+    .page-link.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+    .page-link.disabled { opacity: 0.4; pointer-events: none; }
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.42); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal-box { background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius)*2); padding: 24px; width: 420px; max-width: 95vw; box-shadow: 0 20px 60px rgba(0,0,0,0.14); }
+    .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .modal-body { font-size: 13px; color: var(--muted-foreground); margin-bottom: 20px; line-height: 1.6; }
+    .modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+    /* Toast */
+    #toastContainer { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 11px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; min-width: 280px; max-width: 400px; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.14); animation: slideUp 0.2s ease; }
+    .toast-close { margin-left: auto; cursor: pointer; background: none; border: none; color: inherit; font-size: 17px; line-height: 1; }
+    @keyframes slideUp { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    /* Section headings */
+    .section-heading { font-size: 11px; font-weight: 600; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .page-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+    .page-title { font-size: 20px; font-weight: 700; }
+    .page-sub { font-size: 13px; color: var(--muted-foreground); margin-top: 2px; }
+    /* Spinner */
+    .spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Utilities */
+    .flex { display: flex; } .items-center { align-items: center; } .justify-between { justify-content: space-between; }
+    .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; } .flex-wrap { flex-wrap: wrap; }
+    .mt-1{margin-top:4px}.mt-2{margin-top:8px}.mt-3{margin-top:12px}.mt-4{margin-top:16px}.mt-6{margin-top:24px}
+    .mb-1{margin-bottom:4px}.mb-2{margin-bottom:8px}.mb-3{margin-bottom:12px}.mb-4{margin-bottom:16px}
+    .text-sm{font-size:12px}.text-xs{font-size:11px}.text-muted{color:var(--muted-foreground)}.text-primary{color:var(--primary)}
+    .text-destructive{color:var(--destructive)}.text-success{color:var(--success)}.text-center{text-align:center}
+    .font-mono{font-family:ui-monospace,monospace;font-size:12px}.font-semibold{font-weight:600}
+    .truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.w-full{width:100%}.hidden{display:none!important}
+    @media(max-width:768px){.form-row-2,.form-row-3{grid-template-columns:1fr}}
+  </style>
 </head>
 <body>
-    <div class="container-fluid">
-        <div class="row">
-            <nav class="col-md-2 sidebar p-3">
-                <div class="d-flex align-items-center mb-4">
-                    <img src="{{ url_for('static', filename='logo.svg') }}" alt="Logo" class="me-2" style="width: 32px; height: 32px;">
-                    <h4 class="text-white mb-0">Zendesk Offloader</h4>
-                </div>
-                {% if session.get('user_email') %}
-                <div class="text-white-50 small mb-3">
-                    <i class="bi bi-person-circle"></i> {{ session.get('user_name') or session.get('user_email') }}
-                </div>
-                {% endif %}
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">
-                            <i class="bi bi-speedometer2"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('settings') }}">
-                            <i class="bi bi-gear"></i> Settings
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('tickets') }}">
-                            <i class="bi bi-ticket"></i> Tickets
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('logs') }}">
-                            <i class="bi bi-clock-history"></i> Logs
-                        </a>
-                    </li>
-                    <li class="nav-item mt-4">
-                        <a class="nav-link" href="{{ url_for('logout') }}">
-                            <i class="bi bi-box-arrow-right"></i> Logout
-                        </a>
-                    </li>
-                </ul>
-            </nav>
-            <main class="col-md-10 ms-sm-auto px-md-4 py-4">
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                            <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-                                {{ message }}
-                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                {% endwith %}
-                {% block content %}{% endblock %}
-            </main>
-        </div>
+<div class="app-shell" id="appShell">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w" class="sidebar-logo">
+      <div>
+        <div class="sidebar-title">Zendesk Offloader</div>
+        <div class="sidebar-subtitle">z2w · RHC Solutions</div>
+      </div>
     </div>
-    <footer class="bg-light border-top mt-auto py-3">
-        <div class="container-fluid">
-            <div class="row">
-                <div class="col-md-12 text-center">
-                    <p class="mb-2 text-muted">
-                        &copy; 2025 RHC Solutions. All rights reserved.
-                    </p>
-                    <p class="mb-0">
-                        <a href="https://t.me/rhcsolutions" target="_blank" rel="noopener noreferrer" class="text-decoration-none me-3">
-                            <i class="bi bi-telegram"></i> Support
-                        </a>
-                        <a href="{{ url_for('privacy') }}" class="text-decoration-none me-3">Privacy Policy</a>
-                        <a href="{{ url_for('cookies') }}" class="text-decoration-none">Cookie Policy</a>
-                    </p>
-                </div>
-            </div>
-        </div>
-    </footer>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    {% block scripts %}{% endblock %}
+    {% if session.get('user_email') %}
+    <div class="sidebar-user">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      <span>{{ session.get('user_name') or session.get('user_email') }}</span>
+    </div>
+    {% endif %}
+    <nav class="sidebar-nav">
+      <div class="nav-section">Overview</div>
+      <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a href="{{ url_for('logs') }}" class="nav-item {% if request.endpoint == 'logs' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
+        <span>Offload Logs</span>
+      </a>
+      <a href="{{ url_for('recheck_report') }}" class="nav-item {% if request.endpoint == 'recheck_report' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        <span>Recheck Report</span>
+      </a>
+      <div class="nav-section">Data</div>
+      <a href="{{ url_for('tickets') }}" class="nav-item {% if request.endpoint == 'tickets' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+        <span>Processed Tickets</span>
+      </a>
+      <a href="{{ url_for('storage_report') }}" class="nav-item {% if request.endpoint == 'storage_report' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+        <span>Storage Usage</span>
+      </a>
+      <div class="nav-divider"></div>
+      <div class="nav-section">Explorer</div>
+      <a href="{{ url_for('explorer_app') }}" class="nav-item {% if request.endpoint == 'explorer_app' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <span>Zendesk Explorer</span>
+      </a>
+      <div class="nav-section">Config</div>
+      <a href="{{ url_for('settings') }}" class="nav-item {% if request.endpoint == 'settings' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Settings</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <a href="{{ url_for('logout') }}" class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span>Logout</span>
+      </a>
+      <button class="collapse-btn" onclick="toggleSidebar()" id="collapseBtn">
+        <svg id="collapseIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m15 18-6-6 6-6"/></svg>
+        <span class="collapse-label">Collapse</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main area -->
+  <div class="main-area" id="mainArea">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+        <div class="topbar-sub">{% block page_sub %}{% endblock %}</div>
+      </div>
+      <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div style="padding:12px 20px 0">
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else category }}">
+        {% if category == 'success' %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        {% elif category in ('error','danger') %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        {% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></svg>{% endif %}
+        {{ message }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% block full_content %}
+    <div class="page-content">{% block content %}{% endblock %}</div>
+    {% endblock %}
+  </div>
+</div>
+
+<div id="toastContainer"></div>
+
+<script>
+const CKEY = 'z2w_sb_collapsed';
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const ic = document.getElementById('collapseIcon');
+  const c = sb.classList.toggle('collapsed');
+  localStorage.setItem(CKEY, c ? '1' : '');
+  ic.innerHTML = c ? '<path d="m9 18 6-6-6-6"/>' : '<path d="m15 18-6-6 6-6"/>';
+}
+(function(){
+  if (localStorage.getItem(CKEY)) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.getElementById('collapseIcon').innerHTML = '<path d="m9 18 6-6-6-6"/>';
+  }
+})();
+
+function showToast(message, type) {
+  type = type || 'success';
+  const bg = {success:'oklch(0.50 0.145 162.5)',danger:'oklch(0.52 0.245 27.3)',warning:'oklch(0.60 0.188 70.1)',info:'oklch(0.50 0.126 221.7)',secondary:'oklch(0.55 0.008 286)'};
+  const id = 'toast-' + Date.now();
+  const el = document.createElement('div');
+  el.id = id; el.className = 'toast'; el.style.background = bg[type] || bg.secondary;
+  el.innerHTML = '<span style="flex:1">' + message + '</span><button class="toast-close" onclick="document.getElementById(\'' + id + '\').remove()">&#215;</button>';
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => { const t = document.getElementById(id); if(t) t.remove(); }, 7000);
+}
+
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.addEventListener('click', e => { if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('open'); });
+</script>
+{% block scripts %}{% endblock %}
 </body>
 </html>
-
-

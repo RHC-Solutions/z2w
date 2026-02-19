@@ -3,13 +3,14 @@ Scheduler for daily automatic offload
 """
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime
 from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from telegram_reporter import TelegramReporter
 from slack_reporter import SlackReporter
 from backup_manager import BackupManager
-from database import get_db, OffloadLog
+from database import get_db, OffloadLog, ZendeskStorageSnapshot
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
 import logging
 import threading
@@ -45,9 +46,158 @@ class OffloadScheduler:
         self._job_running = False
         self._backup_lock = threading.Lock()
         self._backup_running = False
+        self._continuous_lock = threading.Lock()
+        self._continuous_running = False
+        self._storage_lock = threading.Lock()
+        self._storage_running = False
+
+    def storage_snapshot_job(self):
+        """Interval job: scan all Zendesk tickets with attachments and record their
+        current storage usage in the zendesk_storage_snapshot table.
+        Skips if already running."""
+        if self._storage_running:
+            logger.debug("[StorageSnapshot] Previous run still active — skipping")
+            return
+        acquired = self._storage_lock.acquire(blocking=False)
+        if not acquired:
+            return
+        try:
+            self._storage_running = True
+            logger.info("[StorageSnapshot] Starting storage snapshot refresh…")
+            start = datetime.utcnow()
+
+            from database import ZendeskTicketCache
+            db = get_db()
+            try:
+                # Fetch all tickets from cache
+                all_cached = db.query(ZendeskTicketCache).all()
+                logger.info(f"[StorageSnapshot] Scanning {len(all_cached)} cached tickets…")
+                now = datetime.utcnow()
+                updated = 0
+                errors = 0
+                total_size = 0
+
+                for cache_row in all_cached:
+                    tid = cache_row.ticket_id
+                    try:
+                        # Pull live comment/attachment list from Zendesk
+                        url = f"{self.offloader.zendesk.base_url}/tickets/{tid}/comments.json"
+                        resp = self.offloader.zendesk.session.get(url, timeout=15)
+                        if resp.status_code == 404:
+                            continue
+                        if not resp.ok:
+                            errors += 1
+                            continue
+                        comments = resp.json().get("comments", [])
+
+                        attach_count = 0
+                        inline_count = 0
+                        ticket_size = 0
+                        import re
+                        for c in comments:
+                            for a in c.get("attachments", []):
+                                fname = a.get("file_name", "")
+                                if fname.lower().endswith("redacted.txt"):
+                                    continue
+                                attach_count += 1
+                                ticket_size += a.get("size", 0)
+                            # Count inline images in html_body
+                            html = c.get("html_body", "") or ""
+                            for _ in re.finditer(r'src="https://[^"]*zendesk[^"]*attachments[^"]*"', html, re.IGNORECASE):
+                                inline_count += 1
+
+                        total_size += ticket_size
+
+                        # Upsert row
+                        row = db.query(ZendeskStorageSnapshot).filter_by(ticket_id=tid).first()
+                        if row:
+                            row.subject      = cache_row.subject or ""
+                            row.zd_status    = cache_row.status
+                            row.attach_count = attach_count
+                            row.inline_count = inline_count
+                            row.total_size   = ticket_size
+                            row.last_seen_at = now
+                            row.updated_at   = now
+                        else:
+                            db.add(ZendeskStorageSnapshot(
+                                ticket_id    = tid,
+                                subject      = cache_row.subject or "",
+                                zd_status    = cache_row.status,
+                                attach_count = attach_count,
+                                inline_count = inline_count,
+                                total_size   = ticket_size,
+                                last_seen_at = now,
+                                updated_at   = now,
+                            ))
+                        updated += 1
+
+                        # Commit in batches
+                        if updated % 200 == 0:
+                            db.commit()
+                            logger.info(f"[StorageSnapshot] progress {updated}/{len(all_cached)}…")
+
+                    except Exception as e:
+                        errors += 1
+                        logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
+
+                db.commit()
+                elapsed = (datetime.utcnow() - start).total_seconds()
+                logger.info(
+                    f"[StorageSnapshot] Done — {updated} tickets scanned, "
+                    f"{total_size/1024/1024:.1f} MB total, {errors} errors, {elapsed:.0f}s"
+                )
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"[StorageSnapshot] Unhandled exception: {e}", exc_info=True)
+        finally:
+            self._storage_running = False
+            self._storage_lock.release()
     
+    def continuous_offload_job(self):
+        """Interval job: offload attachments from tickets updated in the last window.
+        Runs every CONTINUOUS_OFFLOAD_INTERVAL minutes. Skips if already running."""
+        if self._continuous_running:
+            logger.debug("[Continuous] Previous run still active — skipping")
+            return
+        acquired = self._continuous_lock.acquire(blocking=False)
+        if not acquired:
+            return
+        try:
+            self._continuous_running = True
+            from config import CONTINUOUS_OFFLOAD_INTERVAL
+            # Look back 2× the interval to cover any clock drift or slow Zendesk indexing
+            lookback = max(CONTINUOUS_OFFLOAD_INTERVAL * 2, 10)
+            stats = self.offloader.process_recent_tickets(since_minutes=lookback)
+            newly = stats.get("newly_processed", 0)
+            uploaded = stats.get("attachments_uploaded", 0)
+            size_mb = stats.get("total_size_bytes", 0) / 1024 / 1024
+            errors = stats.get("errors", [])
+            if newly > 0 or errors:
+                logger.info(
+                    f"[Continuous] tickets={stats['checked']} skipped={stats['already_done']} "
+                    f"new={newly} files={uploaded} size={size_mb:.1f}MB errors={len(errors)}"
+                )
+            if newly > 0:
+                try:
+                    self.telegram_reporter.send_message(
+                        f"⚡ <b>Continuous offload</b>\n"
+                        f"📋 New tickets processed: {newly}\n"
+                        f"📁 Files uploaded: {uploaded}\n"
+                        f"💾 Size: {size_mb:.1f} MB"
+                        + (f"\n❌ Errors: {len(errors)}" if errors else "")
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"[Continuous offload] Unhandled exception: {e}", exc_info=True)
+        finally:
+            self._continuous_running = False
+            self._continuous_lock.release()
+
     def scheduled_job(self):
-        """Job to run daily at 00:00 GMT"""
+        """Job to run every 5 minutes — full offload including inline images"""
         # Check if a job is already running
         if self._job_running:
             logger.warning("Job already running, skipping this execution")
@@ -63,38 +213,57 @@ class OffloadScheduler:
         
         try:
             self._job_running = True
-            logger.info(f"Scheduled job started at {datetime.utcnow()}")
-            print(f"Scheduled job started at {datetime.utcnow()}")
-            
+            start_time = datetime.utcnow()
+            logger.info(f"Scheduled offload job started at {start_time}")
+            print(f"Scheduled offload job started at {start_time}")
+            try:
+                self.telegram_reporter.send_message(
+                    f"🔄 <b>Offload job started</b>\n📅 {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+                )
+            except Exception:
+                pass
+
             # Run offload
             summary = self.offloader.run_offload()
-            
-            # Send reports to all configured channels
-            email_sent = self.email_reporter.send_report(summary)
-            telegram_sent = self.telegram_reporter.send_report(summary)
-            slack_sent = self.slack_reporter.send_report(summary)
-            
-            # Log report sending status
-            logger.info(f"Reports sent - Email: {email_sent}, Telegram: {telegram_sent}, Slack: {slack_sent}")
-            
+
+            # Only send full reports when something was actually processed or there were errors
+            processed = summary.get("tickets_processed", 0)
+            errors = summary.get("errors", [])
+            inlines = summary.get("inlines_uploaded", 0)
+            uploaded = summary.get("attachments_uploaded", 0)
+
+            if processed > 0 or errors or inlines > 0 or uploaded > 0:
+                email_sent = self.email_reporter.send_report(summary)
+                telegram_sent = self.telegram_reporter.send_report(summary)
+                slack_sent = self.slack_reporter.send_report(summary)
+                logger.info(f"Reports sent - Email: {email_sent}, Telegram: {telegram_sent}, Slack: {slack_sent}")
+            else:
+                email_sent = telegram_sent = slack_sent = False
+                logger.debug(f"[Offload] No new tickets processed — skipping notification")
+
             # Update log entry
             db = get_db()
             try:
                 if summary.get("log_id"):
                     log_entry = db.query(OffloadLog).filter_by(id=summary["log_id"]).first()
                     if log_entry:
-                        # Mark as sent if at least one channel succeeded
                         log_entry.report_sent = email_sent or telegram_sent or slack_sent
                         db.commit()
             finally:
                 db.close()
-            
-            logger.info(f"Scheduled job completed at {datetime.utcnow()}")
-            print(f"Scheduled job completed at {datetime.utcnow()}")
-            
+
+            logger.info(f"Scheduled offload job completed at {datetime.utcnow()}")
+            print(f"Scheduled offload job completed at {datetime.utcnow()}")
+
         except Exception as e:
             logger.error(f"Error in scheduled job: {e}", exc_info=True)
             print(f"ERROR in scheduled job: {e}")
+            try:
+                self.telegram_reporter.send_message(
+                    f"❌ <b>Offload job failed</b>\n\n<code>{str(e)[:500]}</code>"
+                )
+            except Exception:
+                pass
         finally:
             self._job_running = False
             self._job_lock.release()
@@ -246,15 +415,16 @@ The backup file is being sent to you now...
         from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
         
         try:
-            # Schedule daily job at configured time
+            # Schedule offload job — runs every 5 minutes, full offload with inline images
             self.scheduler.add_job(
                 self.scheduled_job,
-                trigger=CronTrigger(hour=SCHEDULER_HOUR, minute=SCHEDULER_MINUTE, timezone=SCHEDULER_TIMEZONE),
+                trigger=IntervalTrigger(minutes=5),
                 id='daily_offload',
-                name='Daily Zendesk Offload',
-                replace_existing=True
+                name='Offload Every 5 Minutes',
+                replace_existing=True,
+                next_run_time=datetime.now()  # start immediately on boot
             )
-            logger.info(f"Scheduled daily offload job for {SCHEDULER_HOUR:02d}:{SCHEDULER_MINUTE:02d} {SCHEDULER_TIMEZONE}")
+            logger.info("Scheduled offload job every 5 minutes")
             
             # Schedule log archiving job daily at 01:00 in configured timezone (after offload job)
             self.scheduler.add_job(
@@ -275,6 +445,40 @@ The backup file is being sent to you now...
                 replace_existing=True
             )
             logger.info(f"Scheduled daily backup job for 00:00 {SCHEDULER_TIMEZONE}")
+
+            # Schedule daily recheck-all — hour configurable via Settings page
+            from config import RECHECK_HOUR, CONTINUOUS_OFFLOAD_INTERVAL
+            self.scheduler.add_job(
+                self._recheck_all_background,
+                trigger=CronTrigger(hour=RECHECK_HOUR, minute=0, timezone=SCHEDULER_TIMEZONE),
+                id='daily_recheck',
+                name='Daily Recheck-All',
+                replace_existing=True
+            )
+            logger.info(f"Scheduled daily recheck-all for {RECHECK_HOUR:02d}:00 {SCHEDULER_TIMEZONE}")
+
+            # Schedule continuous offload — runs every N minutes, processes recently updated tickets
+            self.scheduler.add_job(
+                self.continuous_offload_job,
+                trigger=IntervalTrigger(minutes=CONTINUOUS_OFFLOAD_INTERVAL),
+                id='continuous_offload',
+                name=f'Continuous Offload (every {CONTINUOUS_OFFLOAD_INTERVAL}m)',
+                replace_existing=True,
+                next_run_time=datetime.now()  # start immediately on boot
+            )
+            logger.info(f"Scheduled continuous offload every {CONTINUOUS_OFFLOAD_INTERVAL} minute(s)")
+
+            # Schedule storage snapshot refresh
+            from config import STORAGE_REPORT_INTERVAL
+            self.scheduler.add_job(
+                self.storage_snapshot_job,
+                trigger=IntervalTrigger(minutes=STORAGE_REPORT_INTERVAL),
+                id='storage_snapshot',
+                name=f'Storage Snapshot (every {STORAGE_REPORT_INTERVAL}m)',
+                replace_existing=True,
+                next_run_time=datetime.now()  # populate DB immediately on boot
+            )
+            logger.info(f"Scheduled storage snapshot every {STORAGE_REPORT_INTERVAL} minute(s)")
             
             self.scheduler.start()
             
@@ -290,23 +494,130 @@ The backup file is being sent to you now...
             
             logger.info("Scheduler started successfully")
             print("Scheduler started successfully")
-            
+            try:
+                from config import reload_config, SCHEDULER_TIMEZONE as TZ, RECHECK_HOUR, CONTINUOUS_OFFLOAD_INTERVAL
+                reload_config()
+                import socket
+                host = socket.gethostname()
+                self.telegram_reporter.send_message(
+                    f"▶️ <b>Scheduler started</b>\n🖥️ {host}\n"
+                    f"⚡ Continuous offload: every {CONTINUOUS_OFFLOAD_INTERVAL} min\n"
+                    f"🔄 Full offload: every 5 min\n"
+                    f"🔁 Daily recheck: {RECHECK_HOUR:02d}:00 {TZ}"
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}", exc_info=True)
             print(f"ERROR: Failed to start scheduler: {e}")
             raise
-    
+
     def stop(self):
         """Stop the scheduler"""
+        try:
+            self.telegram_reporter.send_message("⏹ <b>Scheduler stopped</b>")
+        except Exception:
+            pass
         self.scheduler.shutdown()
     
     def run_now(self):
         """Manually trigger the offload job"""
         self.scheduled_job()
-    
+
     def run_backup_now(self):
         """Manually trigger the backup job"""
         self.backup_job()
+
+    def recheck_all_job(self):
+        """Scan all tickets and re-process those with remaining attachments"""
+        if getattr(self, '_recheck_running', False):
+            logger.warning("Recheck-all job already running, skipping")
+            return
+
+        acquired = self._job_lock.acquire(blocking=False)
+        if not acquired:
+            logger.warning("Could not acquire job lock for recheck-all (another job is running)")
+            return
+
+        try:
+            self._recheck_running = True
+            self._recheck_started_at = datetime.utcnow()
+            self._recheck_last_summary = None
+            self._recheck_progress = {"current": 0, "total": 0, "current_ticket": None}
+            logger.info(f"Recheck-all job started at {datetime.utcnow()}")
+
+            def _progress(current, total, ticket_id):
+                self._recheck_progress = {
+                    "current": current,
+                    "total": total,
+                    "current_ticket": ticket_id,
+                }
+
+            summary = self.offloader.run_recheck_all_offload(progress_callback=_progress)
+            self._recheck_last_summary = summary
+
+            logger.info(
+                f"Recheck-all complete — checked: {summary.get('tickets_scanned', 0)}/{summary.get('tickets_total', 0)}, "
+                f"found: {summary.get('tickets_with_remaining_attachments', 0)}, "
+                f"processed: {summary.get('tickets_processed', 0)}, "
+                f"uploaded: {summary.get('attachments_uploaded', 0)}, "
+                f"empty: {summary.get('tickets_genuinely_empty', 0)}, "
+                f"404: {summary.get('tickets_404', 0)}, "
+                f"errors: {len(summary.get('errors', []))}"
+            )
+        except Exception as e:
+            logger.error(f"Error in recheck-all job: {e}", exc_info=True)
+        finally:
+            self._recheck_running = False
+            self._job_lock.release()
+
+    def _recheck_all_background(self):
+        """APScheduler entry point — runs recheck_all_job in a daemon thread so the
+        scheduler thread pool is never blocked by a long-running scan."""
+        t = threading.Thread(target=self.recheck_all_job, daemon=True, name='recheck-all')
+        t.start()
+
+    def run_recheck_all_now(self):
+        """Manually trigger the recheck-all job (non-blocking — runs in background thread)."""
+        self._recheck_all_background()
+
+    def get_recheck_status(self):
+        """Return the current recheck-all status and last summary for the API."""
+        running = getattr(self, '_recheck_running', False)
+        started_at = getattr(self, '_recheck_started_at', None)
+        summary = getattr(self, '_recheck_last_summary', None)
+        progress = getattr(self, '_recheck_progress', {"current": 0, "total": 0, "current_ticket": None})
+        # Expose next scheduled run time
+        next_run = None
+        try:
+            if self.scheduler.running:
+                job = self.scheduler.get_job('daily_recheck')
+                if job and job.next_run_time:
+                    next_run = job.next_run_time.isoformat()
+        except Exception:
+            pass
+        # Fallback: compute next daily occurrence from config
+        if not next_run:
+            try:
+                from config import RECHECK_HOUR, SCHEDULER_TIMEZONE
+                import pytz
+                from datetime import timedelta
+                tz = pytz.timezone(SCHEDULER_TIMEZONE)
+                now = datetime.now(tz)
+                next_dt = now.replace(hour=RECHECK_HOUR, minute=0, second=0, microsecond=0)
+                if next_dt <= now:
+                    next_dt += timedelta(days=1)  # already past today's run — show tomorrow
+                next_run = next_dt.isoformat()
+            except Exception:
+                pass
+        return {
+            "running": running,
+            "started_at": started_at.isoformat() if started_at else None,
+            "progress": progress,
+            "summary": summary,
+            "next_scheduled_run": next_run,
+        }
 
 
 

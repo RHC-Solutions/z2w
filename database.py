@@ -2,7 +2,7 @@
 Database models and setup
 """
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from config import DATABASE_PATH
@@ -19,7 +19,27 @@ class ProcessedTicket(Base):
     attachments_count = Column(Integer, default=0)
     status = Column(String(50), default='processed')
     error_message = Column(Text, nullable=True)
-    wasabi_files = Column(Text, nullable=True)  # JSON array of S3 keys
+    wasabi_files = Column(Text, nullable=True)       # JSON array of S3 keys
+    wasabi_files_size = Column(BigInteger, default=0) # total bytes of all uploaded files
+
+class ZendeskTicketCache(Base):
+    """Local cache of Zendesk ticket metadata — keeps a copy of every ticket
+    so the recheck process never needs to pull all 16k+ tickets from the API.
+    Updated incrementally on each daily run and full recheck."""
+    __tablename__ = 'zendesk_ticket_cache'
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, unique=True, nullable=False, index=True)
+    subject = Column(Text, nullable=True)
+    status = Column(String(50), nullable=True)          # open/pending/solved/closed
+    created_at = Column(DateTime, nullable=True, index=True)
+    updated_at = Column(DateTime, nullable=True)
+    has_attachments = Column(Boolean, default=False)    # hint from ticket metadata
+    comment_count = Column(Integer, nullable=True)
+    requester_id = Column(Integer, nullable=True)
+    assignee_id = Column(Integer, nullable=True)
+    tags = Column(Text, nullable=True)                  # JSON array of strings
+    cached_at = Column(DateTime, default=datetime.utcnow)  # when we last synced this row
 
 class OffloadLog(Base):
     """Log all offload operations"""
@@ -29,10 +49,26 @@ class OffloadLog(Base):
     run_date = Column(DateTime, default=datetime.utcnow, index=True)
     tickets_processed = Column(Integer, default=0)
     attachments_uploaded = Column(Integer, default=0)
+    inlines_uploaded = Column(Integer, default=0)
     errors_count = Column(Integer, default=0)
     status = Column(String(50), default='completed')
     report_sent = Column(Boolean, default=False)
     details = Column(Text, nullable=True)
+
+class ZendeskStorageSnapshot(Base):
+    """Per-ticket storage snapshot pulled from Zendesk — refreshed on a configurable schedule.
+    Tracks how much storage each ticket is consuming in Zendesk (attachments + inline images)."""
+    __tablename__ = 'zendesk_storage_snapshot'
+
+    id           = Column(Integer, primary_key=True)
+    ticket_id    = Column(Integer, unique=True, nullable=False, index=True)
+    subject      = Column(Text, nullable=True)
+    zd_status    = Column(String(50), nullable=True)   # open/pending/solved/closed
+    attach_count = Column(Integer, default=0)          # regular attachments still in Zendesk
+    inline_count = Column(Integer, default=0)          # inline images still in Zendesk
+    total_size   = Column(BigInteger, default=0)       # bytes currently in Zendesk
+    last_seen_at = Column(DateTime, nullable=True)     # last time Zendesk returned this ticket
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Setting(Base):
     """Application settings"""
@@ -44,8 +80,22 @@ class Setting(Base):
     description = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# Database setup
-engine = create_engine(f'sqlite:///{DATABASE_PATH}', echo=False)
+# Database setup — use WAL mode to allow concurrent readers + writer without lock errors
+from sqlalchemy import event as _sa_event
+
+engine = create_engine(
+    f'sqlite:///{DATABASE_PATH}',
+    echo=False,
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
+
+@_sa_event.listens_for(engine, "connect")
+def _set_wal_mode(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
 SessionLocal = sessionmaker(bind=engine)
 
 def init_db():
@@ -55,16 +105,13 @@ def init_db():
     _migrate_database()
 
 def _migrate_database():
-    """Add missing columns to existing database tables"""
+    """Add missing columns / tables to existing database"""
     from sqlalchemy import inspect, text
     inspector = inspect(engine)
-    
-    # Check if processed_tickets table exists
+
+    # ── processed_tickets: add missing columns ───────────────────────
     if 'processed_tickets' in inspector.get_table_names():
-        # Get existing columns
         existing_columns = [col['name'] for col in inspector.get_columns('processed_tickets')]
-        
-        # Add wasabi_files column if it doesn't exist
         if 'wasabi_files' not in existing_columns:
             try:
                 with engine.connect() as conn:
@@ -72,8 +119,31 @@ def _migrate_database():
                     conn.commit()
                 print("Added wasabi_files column to processed_tickets table")
             except Exception as e:
-                # Column might already exist or other error
                 print(f"Note: Could not add wasabi_files column: {e}")
+        if 'wasabi_files_size' not in existing_columns:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE processed_tickets ADD COLUMN wasabi_files_size INTEGER DEFAULT 0"))
+                    conn.commit()
+                print("Added wasabi_files_size column to processed_tickets table")
+            except Exception as e:
+                print(f"Note: Could not add wasabi_files_size column: {e}")
+
+    # ── zendesk_ticket_cache: create if missing ────────────────────────
+    if 'zendesk_ticket_cache' not in inspector.get_table_names():
+        try:
+            ZendeskTicketCache.__table__.create(engine)
+            print("Created zendesk_ticket_cache table")
+        except Exception as e:
+            print(f"Note: Could not create zendesk_ticket_cache table: {e}")
+
+    # ── zendesk_storage_snapshot: create if missing ────────────────────────
+    if 'zendesk_storage_snapshot' not in inspector.get_table_names():
+        try:
+            ZendeskStorageSnapshot.__table__.create(engine)
+            print("Created zendesk_storage_snapshot table")
+        except Exception as e:
+            print(f"Note: Could not create zendesk_storage_snapshot table: {e}")
 
 def get_db():
     """Get database session"""

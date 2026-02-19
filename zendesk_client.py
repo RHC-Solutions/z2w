@@ -191,22 +191,25 @@ class ZendeskClient:
             # Extract inline images from all comments
             for comment in data.get("comments", []):
                 comment_id = comment.get("id")
-                comment_body = comment.get("body", "")
+                # Prefer html_body for image scanning — body is plain text and may strip img tags
+                comment_body = comment.get("html_body") or comment.get("body", "") or ""
                 
                 if not comment_body:
                     continue
                 
-                # Find all inline images in HTML
-                # Pattern: <img src="https://subdomain.zendesk.com/attachments/..." />
-                # or <img src="/attachments/..." />
-                # Match img tags with attachments in src, including various formats
+                # First, collect all known attachments & inline_attachments for this comment
+                # keyed by token so we can match token-URL images to their attachment IDs
+                all_comment_atts = comment.get("attachments", []) + comment.get("inline_attachments", [])
+                token_to_att = {}
+                for att in all_comment_atts:
+                    att_url = att.get("content_url", "")
+                    token_m = re.search(r'/attachments/token/([^/?]+)', att_url)
+                    if token_m:
+                        token_to_att[token_m.group(1)] = att
+                
+                # Find all <img> tags pointing to Zendesk attachment URLs
                 img_pattern = r'<img[^>]+src=["\']([^"\']*attachments[^"\']*)["\'][^>]*>'
                 matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
-                
-                # If no matches with attachments pattern, try a more general pattern
-                if not matches:
-                    img_pattern = r'<img[^>]+src=["\']([^"\']*zendesk[^"\']*attachments[^"\']*)["\'][^>]*>'
-                    matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
                 
                 if matches:
                     print(f"Found {len(matches)} inline image(s) in comment {comment_id} for ticket {ticket_id}")
@@ -219,102 +222,90 @@ class ZendeskClient:
                     if img_url.startswith('/'):
                         img_url = f"https://{self.subdomain}.zendesk.com{img_url}"
                     
-                    # Extract attachment token/ID from URL
-                    # URL format: https://subdomain.zendesk.com/attachments/token/TOKEN/filename
-                    # or https://subdomain.zendesk.com/attachments/attachment_id
                     attachment_id = None
                     filename = "inline_image.png"
                     content_type = "image/png"
-                    attachment_content_url = None
+                    download_url = img_url
                     
-                    # Try to find the attachment in the comment's attachments list
-                    # Match by URL pattern or attachment ID
-                    for att in comment.get("attachments", []):
-                        att_url = att.get("content_url", "")
-                        att_id = att.get("id")
-                        
-                        if not att_url or not att_id:
-                            continue
-                        
-                        # Check if this attachment matches the inline image URL
-                        # Normalize URLs for comparison (remove query params, etc.)
-                        img_url_normalized = img_url.split('?')[0].rstrip('/')
-                        att_url_normalized = att_url.split('?')[0].rstrip('/')
-                        
-                        # Direct match
-                        if img_url_normalized == att_url_normalized:
-                            attachment_id = att_id
-                            filename = att.get("file_name", "inline_image.png")
-                            content_type = att.get("content_type", "image/png")
-                            attachment_content_url = att_url  # Use the API's content_url for downloading
-                            break
-                        
-                        # Substring match (one URL contains the other)
-                        if img_url_normalized in att_url_normalized or att_url_normalized in img_url_normalized:
-                            attachment_id = att_id
-                            filename = att.get("file_name", "inline_image.png")
-                            content_type = att.get("content_type", "image/png")
-                            attachment_content_url = att_url
-                            break
-                        
-                        # Try matching by extracting ID from URL
-                        # URL format: /attachments/12345 or /attachments/token/TOKEN/filename
-                        if '/attachments/' in img_url:
-                            # Try to extract numeric ID from URL
+                    # --- Try to match to a known attachment ---
+                    img_url_norm = img_url.split('?')[0].rstrip('/')
+                    
+                    # 1. Token match via pre-built index
+                    token_m = re.search(r'/attachments/token/([^/?]+)', img_url)
+                    if token_m and token_m.group(1) in token_to_att:
+                        att = token_to_att[token_m.group(1)]
+                        attachment_id = att.get("id")
+                        filename = att.get("file_name", filename)
+                        content_type = att.get("content_type", content_type)
+                        download_url = att.get("content_url", img_url)
+                    
+                    if not attachment_id:
+                        for att in all_comment_atts:
+                            att_url = att.get("content_url", "")
+                            att_id = att.get("id")
+                            if not att_url or not att_id:
+                                continue
+                            att_url_norm = att_url.split('?')[0].rstrip('/')
+                            
+                            # 2. Direct URL match
+                            if img_url_norm == att_url_norm or img_url_norm in att_url_norm or att_url_norm in img_url_norm:
+                                attachment_id = att_id
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
+                                break
+                            
+                            # 3. Numeric ID in URL
                             id_match = re.search(r'/attachments/(\d+)', img_url)
                             if id_match and str(att_id) == id_match.group(1):
                                 attachment_id = att_id
-                                filename = att.get("file_name", "inline_image.png")
-                                content_type = att.get("content_type", "image/png")
-                                attachment_content_url = att_url
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
                                 break
                             
-                            # Try matching by token in URL
-                            # URL format: /attachments/token/TOKEN/filename
-                            token_match = re.search(r'/attachments/token/([^/]+)', img_url)
-                            if token_match:
-                                token = token_match.group(1)
-                                # Check if attachment URL contains this token
-                                if token in att_url:
-                                    attachment_id = att_id
-                                    filename = att.get("file_name", "inline_image.png")
-                                    content_type = att.get("content_type", "image/png")
-                                    attachment_content_url = att_url
-                                    break
-                        
-                        # Try matching by filename in URL
-                        # Extract filename from img_url and compare with attachment filename
-                        filename_match = re.search(r'/([^/]+\.(jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
-                        if filename_match:
-                            url_filename = filename_match.group(1)
-                            att_filename = att.get("file_name", "")
-                            if url_filename.lower() == att_filename.lower():
+                            # 4. Filename match
+                            fn_match = re.search(r'/([^/?]+\.(?:jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
+                            if fn_match and fn_match.group(1).lower() == att.get("file_name", "").lower():
                                 attachment_id = att_id
-                                filename = att_filename
-                                content_type = att.get("content_type", "image/png")
-                                attachment_content_url = att_url
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
                                 break
                     
-                    # If we found an attachment ID, add it to the list
+                    # Extract filename from URL if still default
+                    if filename == "inline_image.png":
+                        name_m = re.search(r'[?&]name=([^&]+)', img_url)
+                        if name_m:
+                            filename = name_m.group(1)
+                        else:
+                            fn_m = re.search(r'/([^/?]+\.(?:jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
+                            if fn_m:
+                                filename = fn_m.group(1)
+                        # Guess content type from extension
+                        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+                        content_type = {
+                            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                            'png': 'image/png', 'gif': 'image/gif',
+                            'webp': 'image/webp', 'svg': 'image/svg+xml',
+                        }.get(ext, 'image/png')
+                    
+                    # Always include — even token-URL-only images (attachment_id may be None)
+                    inline_images.append({
+                        "attachment_id": attachment_id,  # None for token-URL-only images
+                        "comment_id": comment_id,
+                        "content_url": download_url,
+                        "file_name": filename,
+                        "content_type": content_type,
+                        "is_inline": True,
+                        "original_html": original_html,
+                        "comment_body": comment_body,
+                        "img_src": img_url,  # original src for HTML replacement
+                    })
                     if attachment_id:
-                        # Use the attachment's content_url from API for downloading, not the img src URL
-                        download_url = attachment_content_url if attachment_content_url else img_url
-                        inline_images.append({
-                            "attachment_id": attachment_id,
-                            "comment_id": comment_id,
-                            "content_url": download_url,  # Use API content_url for reliable downloading
-                            "file_name": filename,
-                            "content_type": content_type,
-                            "is_inline": True,
-                            "original_html": original_html,
-                            "comment_body": comment_body
-                        })
+                        print(f"  ✓ Matched inline image '{filename}' to attachment_id={attachment_id}")
                     else:
-                        # Log when we find an inline image but can't match it to an attachment
-                        print(f"  ✗ Warning: Found inline image in ticket {ticket_id}, comment {comment_id}, but could not match to attachment.")
-                        print(f"    Image URL: {img_url}")
-                        print(f"    Available attachments in comment: {[att.get('id') for att in comment.get('attachments', [])]}")
-                        print(f"    Attachment URLs: {[att.get('content_url', '')[:80] for att in comment.get('attachments', [])]}")
+                        print(f"  ⚠ Token-URL inline image '{filename}' — no attachment_id, will upload+link only")
         except requests.exceptions.RequestException as e:
             print(f"Error fetching inline images for ticket {ticket_id}: {e}")
         
@@ -338,7 +329,43 @@ class ZendeskClient:
         except requests.exceptions.RequestException as e:
             print(f"Error fetching comments for ticket {ticket_id}: {e}")
             return []
-    
+
+    def get_ticket_status(self, ticket_id: int) -> Optional[str]:
+        """Return the current status of a ticket (open/pending/solved/closed) or None on error."""
+        if not self.base_url:
+            return None
+        try:
+            resp = self.session.get(f"{self.base_url}/tickets/{ticket_id}.json")
+            if resp.ok:
+                return resp.json().get("ticket", {}).get("status")
+        except Exception as e:
+            print(f"Error fetching status for ticket {ticket_id}: {e}")
+        return None
+
+    def add_wasabi_link_comment(self, ticket_id: int, comment_id: int, wasabi_url: str, filename: str, img_src: str) -> bool:
+        """
+        For token-URL-only inline images (no attachment_id): add a private comment with
+        a Wasabi link so the file is reachable after the original Zendesk-hosted URL expires.
+        Cannot redact — just adds a reference link.
+        """
+        if not self.base_url:
+            return False
+        try:
+            body = (
+                f'<p>📎 Image backed up to Wasabi: '
+                f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
+                f'<p><small>Original src: {img_src}</small></p>'
+            )
+            update_data = {"ticket": {"comment": {"html_body": body, "public": False}}}
+            resp = self.session.put(f"{self.base_url}/tickets/{ticket_id}.json", json=update_data)
+            resp.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error adding Wasabi link comment for ticket {ticket_id}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"  Response: {e.response.text[:300]}")
+            return False
+
     def replace_inline_image_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
         """
         Replace an inline image in a comment with a Wasabi link
@@ -464,6 +491,12 @@ class ZendeskClient:
         url = f"{self.base_url}/tickets/{ticket_id}.json"
         
         try:
+            # Check ticket status — closed tickets cannot be updated via Zendesk API
+            ticket_resp = self.session.get(url)
+            ticket_status = None
+            if ticket_resp.ok:
+                ticket_status = ticket_resp.json().get("ticket", {}).get("status")
+
             # Get the original comment to check if it's public or private
             comments = self.get_ticket_comments(ticket_id)
             original_comment = None
@@ -475,26 +508,31 @@ class ZendeskClient:
             is_public = True
             if original_comment:
                 is_public = original_comment.get("public", True)
-            
-            # Create a new comment with the Wasabi link
-            # Format: [Attachment Secured: filename (link)]
-            wasabi_link_text = f"[Attachment Secured: {filename}]({wasabi_url})"
-            
-            # Add a new comment with the Wasabi link
-            update_data = {
-                "ticket": {
-                    "comment": {
-                        "body": wasabi_link_text,
-                        "public": is_public
+
+            if ticket_status == "closed":
+                # Closed tickets cannot receive new comments or redactions — skip silently,
+                # the attachment has already been uploaded to Wasabi.
+                logger.info(f"Ticket {ticket_id} is closed — skipping Zendesk comment and redact (Zendesk blocks updates on closed tickets)")
+                return True  # treat as success — file is safely in Wasabi
+            else:
+                # Create a new comment with the Wasabi link
+                # Format: [Attachment Secured: filename (link)]
+                wasabi_link_text = f"[Attachment Secured: {filename}]({wasabi_url})"
+                
+                update_data = {
+                    "ticket": {
+                        "comment": {
+                            "body": wasabi_link_text,
+                            "public": is_public
+                        }
                     }
                 }
-            }
-            
-            response = self.session.put(url, json=update_data)
-            response.raise_for_status()
-            
-            # Now redact (delete) the attachment from the original comment
-            return self.delete_attachment(ticket_id, comment_id, attachment_id)
+                
+                response = self.session.put(url, json=update_data)
+                response.raise_for_status()
+                
+                # Now redact (delete) the attachment from the original comment
+                return self.delete_attachment(ticket_id, comment_id, attachment_id)
             
         except requests.exceptions.RequestException as e:
             print(f"Error replacing attachment {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}")
@@ -602,6 +640,64 @@ class ZendeskClient:
             print(f"Error marking ticket {ticket_id} as read: {e}")
             return False
     
+    def get_recently_updated_tickets(self, since_minutes: int = 10) -> List[Dict]:
+        """
+        Fetch only tickets updated in the last `since_minutes` minutes using the
+        Zendesk incremental tickets API (/incremental/tickets/cursor).
+        Much faster than a full scan — ideal for continuous/interval offload.
+        Returns list of ticket dicts (may include deleted/spam; caller should filter).
+        """
+        if not self.base_url:
+            return []
+
+        from datetime import datetime, timezone, timedelta
+        import math
+
+        since_dt = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+        since_ts = math.floor(since_dt.timestamp())
+
+        tickets = []
+        url = f"{self.base_url}/incremental/tickets.json"
+        params = {"start_time": since_ts}
+
+        logger.info(f"Fetching tickets updated since {since_dt.strftime('%Y-%m-%d %H:%M:%S')} UTC (last {since_minutes} min)")
+
+        while url:
+            try:
+                response = self.session.get(url, params=params)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 30))
+                    logger.warning(f"Rate limited — waiting {retry_after}s")
+                    time.sleep(retry_after)
+                    continue
+                if response.status_code == 422:
+                    # start_time too recent (Zendesk requires at least 1 min ago) — return empty
+                    logger.info("Incremental API: start_time too recent, no tickets yet")
+                    return []
+                response.raise_for_status()
+                data = response.json()
+
+                page_tickets = data.get("tickets", [])
+                # Filter out deleted/spam tickets
+                active = [t for t in page_tickets if t.get("status") not in ("deleted",)]
+                tickets.extend(active)
+
+                # Incremental API uses end_of_stream flag
+                if data.get("end_of_stream", True):
+                    break
+                next_url = data.get("next_page")
+                if not next_url:
+                    break
+                url = next_url
+                params = None
+
+            except Exception as e:
+                logger.error(f"Error fetching recent tickets: {e}")
+                break
+
+        logger.info(f"Incremental fetch returned {len(tickets)} active tickets updated in last {since_minutes} min")
+        return tickets
+
     def get_new_tickets(self, processed_ticket_ids: set) -> List[Dict]:
         """
         Get only new tickets that haven't been processed
