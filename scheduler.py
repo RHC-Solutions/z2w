@@ -4,7 +4,7 @@ Scheduler for daily automatic offload
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime
+from datetime import datetime, timedelta
 from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
 from telegram_reporter import TelegramReporter
@@ -131,9 +131,11 @@ class OffloadScheduler:
                             ))
                         updated += 1
 
-                        # Commit in batches
-                        if updated % 200 == 0:
+                        # Commit in smaller batches and release DB lock between them
+                        if updated % 50 == 0:
                             db.commit()
+                            db.close()
+                            db = get_db()
                             logger.info(f"[StorageSnapshot] progress {updated}/{len(all_cached)}…")
 
                     except Exception as e:
@@ -464,7 +466,7 @@ The backup file is being sent to you now...
                 id='continuous_offload',
                 name=f'Continuous Offload (every {CONTINUOUS_OFFLOAD_INTERVAL}m)',
                 replace_existing=True,
-                next_run_time=datetime.now()  # start immediately on boot
+                next_run_time=datetime.now() + timedelta(seconds=30)  # stagger: 30s after boot
             )
             logger.info(f"Scheduled continuous offload every {CONTINUOUS_OFFLOAD_INTERVAL} minute(s)")
 
@@ -476,7 +478,7 @@ The backup file is being sent to you now...
                 id='storage_snapshot',
                 name=f'Storage Snapshot (every {STORAGE_REPORT_INTERVAL}m)',
                 replace_existing=True,
-                next_run_time=datetime.now()  # populate DB immediately on boot
+                next_run_time=datetime.now() + timedelta(minutes=2)  # stagger: 2min after boot
             )
             logger.info(f"Scheduled storage snapshot every {STORAGE_REPORT_INTERVAL} minute(s)")
             

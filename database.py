@@ -99,8 +99,8 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     # WAL mode: readers never block writers, writers never block readers
     cursor.execute("PRAGMA journal_mode=WAL")
-    # busy_timeout: retry locked writes for up to 15 s before raising OperationalError
-    cursor.execute("PRAGMA busy_timeout=15000")
+    # busy_timeout: retry locked writes for up to 30 s before raising OperationalError
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA synchronous=NORMAL")
     # Keep WAL file small; checkpoint after every 200 pages
     cursor.execute("PRAGMA wal_autocheckpoint=200")
@@ -160,52 +160,69 @@ def get_db():
     return SessionLocal()
 
 
-def upsert_processed_ticket(db, ticket_id: int, **kwargs):
+def upsert_processed_ticket(db, ticket_id: int, _max_retries: int = 5, **kwargs):
     """
-    Atomic upsert for processed_tickets using SQLite's INSERT OR REPLACE.
-    Eliminates the check-then-insert race condition that causes 'database is locked'
-    when two threads try to write the same ticket_id simultaneously.
+    Atomic upsert for processed_tickets with robust retry logic.
+    Handles 'database is locked' by retrying with exponential backoff.
 
     kwargs are the column values: attachments_count, status, error_message,
     wasabi_files, wasabi_files_size, inlines_uploaded, inlines_deleted.
     Any key not provided keeps its existing value (via SELECT + merge before INSERT).
     """
-    from sqlalchemy import text
+    import time as _time
 
-    # Fetch existing row so we can merge (preserve fields not being updated)
-    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+    for attempt in range(1, _max_retries + 1):
+        try:
+            existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
 
-    if existing:
-        for key, val in kwargs.items():
-            if hasattr(existing, key):
-                setattr(existing, key, val)
-        existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
-    else:
-        row = ProcessedTicket(
-            ticket_id=ticket_id,
-            processed_at=kwargs.get('processed_at', datetime.utcnow()),
-            attachments_count=kwargs.get('attachments_count', 0),
-            status=kwargs.get('status', 'processed'),
-            error_message=kwargs.get('error_message', None),
-            wasabi_files=kwargs.get('wasabi_files', None),
-            wasabi_files_size=kwargs.get('wasabi_files_size', 0),
-        )
-        db.add(row)
+            if existing:
+                for key, val in kwargs.items():
+                    if hasattr(existing, key):
+                        setattr(existing, key, val)
+                existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
+            else:
+                row = ProcessedTicket(
+                    ticket_id=ticket_id,
+                    processed_at=kwargs.get('processed_at', datetime.utcnow()),
+                    attachments_count=kwargs.get('attachments_count', 0),
+                    status=kwargs.get('status', 'processed'),
+                    error_message=kwargs.get('error_message', None),
+                    wasabi_files=kwargs.get('wasabi_files', None),
+                    wasabi_files_size=kwargs.get('wasabi_files_size', 0),
+                )
+                db.add(row)
 
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        # Last-writer-wins retry: another thread beat us — just update
-        db.expire_all()
-        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-        if existing:
-            for key, val in kwargs.items():
-                if hasattr(existing, key):
-                    setattr(existing, key, val)
-            existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
             db.commit()
-        else:
-            raise
+            return  # success
+        except Exception as e:
+            db.rollback()
+            err_str = str(e).lower()
+            if 'locked' in err_str or 'busy' in err_str:
+                if attempt < _max_retries:
+                    wait = 0.5 * (2 ** (attempt - 1))  # 0.5, 1, 2, 4, 8 seconds
+                    import logging
+                    logging.getLogger('zendesk_offloader').warning(
+                        f"[upsert] DB locked for ticket {ticket_id}, retry {attempt}/{_max_retries} in {wait:.1f}s"
+                    )
+                    _time.sleep(wait)
+                    db.expire_all()
+                    continue
+            # Non-lock error or last retry — try last-writer-wins fallback
+            db.expire_all()
+            try:
+                existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+                if existing:
+                    for key, val in kwargs.items():
+                        if hasattr(existing, key):
+                            setattr(existing, key, val)
+                    existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
+                    db.commit()
+                    return
+                else:
+                    raise
+            except Exception:
+                db.rollback()
+                if attempt >= _max_retries:
+                    raise
 
 

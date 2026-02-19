@@ -67,26 +67,40 @@
 </div>
 
 <div class="mt-6">
-  <div class="flex items-center justify-between mb-3">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
     <div class="section-heading" style="margin-bottom:0;border:none">Recent Offload Runs</div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <input type="text" id="logSearch" class="form-control" placeholder="Search…" style="max-width:180px;height:30px;font-size:12px" oninput="filterLogs()">
+      <select id="logStatusFilter" class="form-select" style="height:30px;font-size:12px;width:auto;min-width:100px" onchange="filterLogs()">
+        <option value="">All statuses</option>
+        <option value="completed">Completed</option>
+        <option value="running">Running</option>
+        <option value="error">Error</option>
+      </select>
+    </div>
   </div>
   <div class="table-wrap">
-    <table>
+    <table id="logsTable">
       <thead>
         <tr>
-          <th>Date</th>
-          <th>Tickets</th>
-          <th>Attachments</th>
-          <th>Inline</th>
-          <th>Errors</th>
+          <th class="sortable" data-col="date" onclick="sortLogs('date')">Date <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="tickets" onclick="sortLogs('tickets')">Tickets <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="attachments" onclick="sortLogs('attachments')">Attachments <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="inline" onclick="sortLogs('inline')">Inline <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="errors" onclick="sortLogs('errors')">Errors <span class="sort-icon">↕</span></th>
           <th>Status</th>
           <th>Report</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="logsTbody">
         {% for log in recent_logs %}
         {% set d = (log.details | fromjson) if log.details else {} %}
-        <tr>
+        <tr data-date="{{ log.run_date.strftime('%Y-%m-%d %H:%M') }}"
+            data-tickets="{{ log.tickets_processed }}"
+            data-attachments="{{ log.attachments_uploaded }}"
+            data-inline="{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}"
+            data-errors="{{ log.errors_count or 0 }}"
+            data-status="{{ log.status }}">
           <td class="font-mono">{{ log.run_date.strftime('%Y-%m-%d %H:%M') }}</td>
           <td>{{ log.tickets_processed }}</td>
           <td>{{ log.attachments_uploaded }}</td>
@@ -172,5 +186,33 @@ document.getElementById('backupConfirmBtn').addEventListener('click',function(){
 });
 updateSchedulerStatus();
 setInterval(updateSchedulerStatus,30000);
+
+/* ── Sort & Filter for Offload Runs table ── */
+var _sortCol='date', _sortDir='desc';
+function sortLogs(col){
+  if(_sortCol===col) _sortDir=_sortDir==='asc'?'desc':'asc';
+  else { _sortCol=col; _sortDir='desc'; }
+  document.querySelectorAll('#logsTable th.sortable .sort-icon').forEach(function(el){el.textContent='↕';});
+  var th=document.querySelector('#logsTable th[data-col="'+col+'"] .sort-icon');
+  if(th) th.textContent=_sortDir==='asc'?'↑':'↓';
+  var tbody=document.getElementById('logsTbody');
+  var rows=Array.from(tbody.querySelectorAll('tr[data-date]'));
+  rows.sort(function(a,b){
+    var av=a.dataset[col]||'', bv=b.dataset[col]||'';
+    if(col==='date') return _sortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);
+    var an=parseFloat(av)||0, bn=parseFloat(bv)||0;
+    return _sortDir==='asc'?an-bn:bn-an;
+  });
+  rows.forEach(function(r){tbody.appendChild(r);});
+}
+function filterLogs(){
+  var q=(document.getElementById('logSearch').value||'').toLowerCase();
+  var st=(document.getElementById('logStatusFilter').value||'').toLowerCase();
+  document.querySelectorAll('#logsTbody tr[data-date]').forEach(function(tr){
+    var txt=tr.textContent.toLowerCase();
+    var match=(!q||txt.indexOf(q)!==-1)&&(!st||tr.dataset.status===st);
+    tr.style.display=match?'':'none';
+  });
+}
 </script>
 {% endblock %}

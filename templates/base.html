@@ -230,6 +230,9 @@
     }
     th a { color: inherit; text-decoration: none; }
     th a:hover { color: var(--foreground); }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { color: var(--foreground); background: oklch(0.18 0.008 265); }
+    th .sort-icon { opacity: 0.45; font-size: 11px; margin-left: 2px; }
     td { padding: 9px 13px; font-size: 13.5px; border-bottom: 1px solid var(--border); vertical-align: middle; }
     tbody tr:last-child td { border-bottom: none; }
     tbody tr:hover { background: color-mix(in oklch, var(--muted) 55%, transparent); }

@@ -87,6 +87,16 @@ def init_scheduler():
         scheduler = OffloadScheduler()
     return scheduler
 
+def _sanitize_for_json(obj):
+    """Recursively convert datetime objects to ISO strings for safe JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
 def login_required(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
@@ -1158,11 +1168,10 @@ def debug_login_info():
     finally:
         db.close()
 
-@app.route('/api/test_connection', methods=['POST'])
+@app.route('/api/test_connection/<connection_type>', methods=['POST'])
 @login_required
-def test_connection():
+def test_connection(connection_type):
     """Test Zendesk and Wasabi connections"""
-    connection_type = request.json.get('type')
     
     if connection_type == 'zendesk':
         try:
@@ -1237,7 +1246,64 @@ def test_connection():
         except Exception as e:
             return jsonify({'success': False, 'message': f'Connection error: {str(e)}'})
     
-    return jsonify({'success': False, 'message': 'Invalid connection type'})
+    elif connection_type == 'telegram':
+        try:
+            from config import reload_config
+            reload_config()
+            db = get_db()
+            try:
+                settings_dict = {}
+                for s in db.query(Setting).all():
+                    settings_dict[s.key] = s.value
+                import os
+                if settings_dict.get('TELEGRAM_BOT_TOKEN'):
+                    os.environ['TELEGRAM_BOT_TOKEN'] = settings_dict['TELEGRAM_BOT_TOKEN']
+                if settings_dict.get('TELEGRAM_CHAT_ID'):
+                    os.environ['TELEGRAM_CHAT_ID'] = settings_dict['TELEGRAM_CHAT_ID']
+                reload_config()
+            finally:
+                db.close()
+            from telegram_reporter import TelegramReporter
+            reporter = TelegramReporter()
+            if not reporter.bot_token or not reporter.chat_id:
+                return jsonify({'success': False, 'message': 'Bot token or chat ID not configured'})
+            sent = reporter.send_message('✅ <b>Test message from z2w</b>\nConnection successful!')
+            if sent:
+                return jsonify({'success': True, 'message': 'Test message sent to Telegram!'})
+            else:
+                return jsonify({'success': False, 'message': 'Failed to send message — check token and chat ID'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Telegram error: {str(e)}'})
+
+    elif connection_type == 'slack':
+        try:
+            from config import reload_config
+            reload_config()
+            db = get_db()
+            try:
+                settings_dict = {}
+                for s in db.query(Setting).all():
+                    settings_dict[s.key] = s.value
+                import os
+                if settings_dict.get('SLACK_WEBHOOK_URL'):
+                    os.environ['SLACK_WEBHOOK_URL'] = settings_dict['SLACK_WEBHOOK_URL']
+                reload_config()
+            finally:
+                db.close()
+            from slack_reporter import SlackReporter
+            reporter = SlackReporter()
+            if not reporter.webhook_url:
+                return jsonify({'success': False, 'message': 'Webhook URL not configured'})
+            import requests as req
+            resp = req.post(reporter.webhook_url, json={'text': '✅ Test message from z2w — connection successful!'}, timeout=10)
+            if resp.status_code == 200:
+                return jsonify({'success': True, 'message': 'Test message sent to Slack!'})
+            else:
+                return jsonify({'success': False, 'message': f'Slack returned status {resp.status_code}: {resp.text[:200]}'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Slack error: {str(e)}'})
+
+    return jsonify({'success': False, 'message': f'Unknown connection type: {connection_type}'})
 
 @app.route('/api/run_now', methods=['POST'])
 @login_required
@@ -1356,23 +1422,15 @@ def recheck_status():
         sched = init_scheduler()
         status = sched.get_recheck_status()
         summary = status.get('summary')
-        # Convert datetime objects to strings for JSON serialisation
+        # Recursively convert datetime objects to strings for JSON serialisation
         if summary:
-            if hasattr(summary.get('run_date'), 'isoformat'):
-                summary = dict(summary)
-                summary['run_date'] = summary['run_date'].isoformat()
-            # details may contain datetime objects too; strip them for JSON safety
-            details_out = []
-            for d in summary.get('details', []):
-                if isinstance(d, dict):
-                    d2 = {k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in d.items()}
-                    details_out.append(d2)
-            summary['details'] = details_out
+            summary = _sanitize_for_json(summary)
         return jsonify({
             'running': status['running'],
             'started_at': status['started_at'],
             'progress': status.get('progress', {}),
             'summary': summary,
+            'next_scheduled_run': status.get('next_scheduled_run'),
         })
     except Exception as e:
         return jsonify({'running': False, 'started_at': None, 'progress': {}, 'summary': None, 'error': str(e)})
@@ -1438,12 +1496,17 @@ def recheck_report():
     finally:
         db.close()
 
+    # Sanitize summary for JSON serialization (datetime objects → ISO strings)
+    safe_summary = None
+    if summary:
+        safe_summary = _sanitize_for_json(summary)
+
     return render_template(
         'recheck_report.html',
         running=running,
         started_at=status.get('started_at'),
         progress=status.get('progress', {}),
-        summary=summary,
+        summary=safe_summary,
         last_log=last_log,
         zendesk_subdomain=zendesk_subdomain,
     )

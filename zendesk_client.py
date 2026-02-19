@@ -352,7 +352,7 @@ class ZendeskClient:
             return False
         try:
             body = (
-                f'<p>📎 Image backed up to Wasabi: '
+                f'<p>📎 Image/document secured: '
                 f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
                 f'<p><small>Original src: {img_src}</small></p>'
             )
@@ -577,31 +577,76 @@ class ZendeskClient:
             print(f"ERROR: Request exception when redacting attachment {attachment_id}: {e}")
             return False
     
-    def download_attachment(self, attachment_url: str) -> Optional[bytes]:
+    def download_attachment(self, attachment_url: str, max_retries: int = 3) -> Optional[bytes]:
         """
-        Download attachment content
-        Handles both regular attachment URLs and inline image URLs
+        Download attachment content with retry logic.
+        Handles both regular attachment URLs and inline image URLs.
+        Retries on transient errors (429, 5xx, timeouts).
         """
         try:
             # Ensure URL is absolute
             if attachment_url.startswith('/'):
                 attachment_url = f"https://{self.subdomain}.zendesk.com{attachment_url}"
             
-            # Use the session which has authentication
-            response = self.session.get(attachment_url, timeout=30)
-            response.raise_for_status()
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    # Use the session which has authentication
+                    response = self.session.get(attachment_url, timeout=30)
+                    
+                    # Handle rate limiting
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get('Retry-After', 30))
+                        logger.warning(f"Download rate-limited (429), waiting {retry_after}s (attempt {attempt}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    
+                    # Retry on server errors
+                    if response.status_code >= 500:
+                        logger.warning(f"Download server error {response.status_code} for {attachment_url} (attempt {attempt}/{max_retries})")
+                        time.sleep(2 * attempt)
+                        continue
+                    
+                    # 403/404 — try alternate URL format once before giving up
+                    if response.status_code in (403, 404) and attempt == 1:
+                        logger.info(f"Download got {response.status_code}, retrying with alternate URL (attempt {attempt}/{max_retries})")
+                        # Strip query params and try bare URL
+                        bare_url = attachment_url.split('?')[0]
+                        if bare_url != attachment_url:
+                            alt_resp = self.session.get(bare_url, timeout=30)
+                            if alt_resp.ok and alt_resp.content:
+                                logger.info(f"Download succeeded with bare URL (no query params)")
+                                return alt_resp.content
+                        time.sleep(1)
+                        continue
+                    
+                    response.raise_for_status()
+                    
+                    # Check if we got actual content
+                    if response.content:
+                        return response.content
+                    else:
+                        logger.warning(f"Empty content downloaded from {attachment_url}")
+                        return None
+                        
+                except requests.exceptions.Timeout:
+                    last_error = f"Timeout downloading {attachment_url} (attempt {attempt}/{max_retries})"
+                    logger.warning(last_error)
+                    time.sleep(2 * attempt)
+                except requests.exceptions.ConnectionError as e:
+                    last_error = f"Connection error downloading {attachment_url}: {e} (attempt {attempt}/{max_retries})"
+                    logger.warning(last_error)
+                    time.sleep(2 * attempt)
             
-            # Check if we got actual content
-            if response.content:
-                return response.content
-            else:
-                print(f"Warning: Empty content downloaded from {attachment_url}")
-                return None
+            # All retries exhausted
+            logger.error(f"Download failed after {max_retries} attempts: {attachment_url}" + (f" — last error: {last_error}" if last_error else ""))
+            return None
+            
         except requests.exceptions.HTTPError as e:
-            print(f"HTTP Error downloading attachment from {attachment_url}: {e.response.status_code} - {e.response.text[:200]}")
+            logger.error(f"HTTP Error downloading attachment from {attachment_url}: {e.response.status_code} - {e.response.text[:200]}")
             return None
         except requests.exceptions.RequestException as e:
-            print(f"Error downloading attachment from {attachment_url}: {e}")
+            logger.error(f"Error downloading attachment from {attachment_url}: {e}")
             return None
     
     def mark_ticket_as_read(self, ticket_id: int) -> bool:

@@ -193,10 +193,10 @@
   <div class="modal-box">
     <div class="modal-title">🔁 Start New Recheck?</div>
     <div class="modal-body">
-      Scans <strong>~11,000 zero-upload candidates</strong> + tickets missing from the DB.<br><br>
+      Scans <strong>all zero-upload candidates</strong> + tickets missing from the DB.<br><br>
       <ul style="font-size:12px;color:var(--muted-foreground);margin:0 0 0 18px;line-height:1.8">
-        <li>2 Zendesk API calls per ticket (~22,000 total)</li>
-        <li>Rate-limited to ~100 req/min → estimated <strong>3–4 hours</strong></li>
+        <li>2 Zendesk API calls per ticket</li>
+        <li>Rate-limited to ~100 req/min → may take several hours</li>
         <li>Runs in background — page polls every 4s</li>
         <li>Safe to <strong>close the browser</strong> — job continues on server</li>
       </ul>
@@ -412,11 +412,12 @@ function poll(){
     if(data.next_scheduled_run){var d=new Date(data.next_scheduled_run.endsWith('Z')?data.next_scheduled_run:data.next_scheduled_run+'Z');document.getElementById('nextRunLabel').textContent=d.toLocaleString();}
     if(data.running){
       if(data.started_at&&!startedAt){startedAt=new Date(data.started_at.endsWith('Z')?data.started_at:data.started_at+'Z').getTime();document.getElementById('startedAtLabel').textContent=new Date(startedAt).toLocaleTimeString();}
-      updateProgress(data.progress||{},null);
+      updateProgress(data.progress||{},data.summary||null);
       document.getElementById('progressPanel').style.removeProperty('display');
       document.getElementById('noDataPanel').style.display='none';
     } else {
       clearInterval(pollInterval);pollInterval=null;
+      clearInterval(elapsedInterval);elapsedInterval=null;
       document.getElementById('progressPanel').style.display='none';
       if(data.summary){renderLiveSummary(data.summary);document.getElementById('noDataPanel').style.display='none';}
       else{var dbp=document.getElementById('dbLogPanel');if(!dbp)document.getElementById('noDataPanel').style.removeProperty('display');}
@@ -440,11 +441,16 @@ document.getElementById('newRecheckConfirmBtn').addEventListener('click',functio
       clearInterval(elapsedInterval); elapsedInterval=setInterval(updateElapsed,1000);
       switchTab('report');
     } else showToast(d.message,'danger');
-  });
+  }).catch(function(e){showToast('Network error: '+e,'danger');});
 });
 
 (function(){
   loadNextRun();
+  // Pre-load skipped ticket count for badge
+  fetch('/api/skipped_tickets?page=1&limit=1').then(function(r){return r.json();}).then(function(data){
+    var total=data.total||0;
+    var sb=document.getElementById('skippedBadge'); if(sb&&total>0){sb.textContent=total.toLocaleString();sb.style.display='';}
+  }).catch(function(){});
   {% if running %}
   startedAt={{ ('new Date("' + started_at + ('Z' if not started_at.endswith('Z') else '') + '").getTime()')|safe if started_at else 'Date.now()' }};
   document.getElementById('startedAtLabel').textContent=new Date(startedAt).toLocaleTimeString();
