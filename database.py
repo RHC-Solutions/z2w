@@ -160,3 +160,52 @@ def get_db():
     return SessionLocal()
 
 
+def upsert_processed_ticket(db, ticket_id: int, **kwargs):
+    """
+    Atomic upsert for processed_tickets using SQLite's INSERT OR REPLACE.
+    Eliminates the check-then-insert race condition that causes 'database is locked'
+    when two threads try to write the same ticket_id simultaneously.
+
+    kwargs are the column values: attachments_count, status, error_message,
+    wasabi_files, wasabi_files_size, inlines_uploaded, inlines_deleted.
+    Any key not provided keeps its existing value (via SELECT + merge before INSERT).
+    """
+    from sqlalchemy import text
+
+    # Fetch existing row so we can merge (preserve fields not being updated)
+    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+
+    if existing:
+        for key, val in kwargs.items():
+            if hasattr(existing, key):
+                setattr(existing, key, val)
+        existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
+    else:
+        row = ProcessedTicket(
+            ticket_id=ticket_id,
+            processed_at=kwargs.get('processed_at', datetime.utcnow()),
+            attachments_count=kwargs.get('attachments_count', 0),
+            status=kwargs.get('status', 'processed'),
+            error_message=kwargs.get('error_message', None),
+            wasabi_files=kwargs.get('wasabi_files', None),
+            wasabi_files_size=kwargs.get('wasabi_files_size', 0),
+        )
+        db.add(row)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # Last-writer-wins retry: another thread beat us — just update
+        db.expire_all()
+        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
+        if existing:
+            for key, val in kwargs.items():
+                if hasattr(existing, key):
+                    setattr(existing, key, val)
+            existing.processed_at = kwargs.get('processed_at', datetime.utcnow())
+            db.commit()
+        else:
+            raise
+
+

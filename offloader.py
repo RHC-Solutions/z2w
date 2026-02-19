@@ -7,7 +7,7 @@ import json
 import logging
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from database import get_db, ProcessedTicket, OffloadLog, ZendeskTicketCache
+from database import get_db, ProcessedTicket, OffloadLog, ZendeskTicketCache, upsert_processed_ticket
 from sqlalchemy.exc import IntegrityError
 
 # Get logger
@@ -200,29 +200,15 @@ class AttachmentOffloader:
                     total_size_bytes = result.get("total_size_bytes", 0)
                     
                     # Mark ticket as processed in database
-                    # Check if ticket already exists (in case of race condition)
-                    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                    if existing:
-                        # Update existing record
-                        existing.processed_at = datetime.utcnow()
-                        existing.attachments_count = result["attachments_uploaded"]
-                        existing.status = "processed"
-                        existing.error_message = None
-                        existing.wasabi_files = wasabi_files_json
-                        existing.wasabi_files_size = total_size_bytes
-                        db.commit()
-                        logger.debug(f"[Ticket {ticket_id}] Updated existing DB record")
-                    else:
-                        # Create new record
-                        processed_ticket = ProcessedTicket(
-                            ticket_id=ticket_id,
-                            attachments_count=result["attachments_uploaded"],
-                            status="processed",
-                            wasabi_files=wasabi_files_json,
-                            wasabi_files_size=total_size_bytes
-                        )
-                        db.add(processed_ticket)
-                        db.commit()
+                    upsert_processed_ticket(
+                        db,
+                        ticket_id=ticket_id,
+                        attachments_count=result["attachments_uploaded"],
+                        status="processed",
+                        error_message=None,
+                        wasabi_files=wasabi_files_json,
+                        wasabi_files_size=total_size_bytes,
+                    )
                     
                     # Mark ticket as read in Zendesk
                     self.zendesk.mark_ticket_as_read(ticket_id)
@@ -234,25 +220,15 @@ class AttachmentOffloader:
                     print(f"ERROR: {error_msg}")
                     logger.error(error_msg)
                     
-                    # Log failed ticket - check if already exists first
+                    # Log failed ticket
                     try:
-                        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                        if existing:
-                            # Update existing record with error
-                            existing.processed_at = datetime.utcnow()
-                            existing.status = "error"
-                            existing.error_message = str(e)
-                            db.commit()
-                        else:
-                            # Create new error record
-                            processed_ticket = ProcessedTicket(
-                                ticket_id=ticket_id,
-                                attachments_count=0,
-                                status="error",
-                                error_message=str(e)
-                            )
-                            db.add(processed_ticket)
-                            db.commit()
+                        upsert_processed_ticket(
+                            db,
+                            ticket_id=ticket_id,
+                            attachments_count=0,
+                            status="error",
+                            error_message=str(e),
+                        )
                     except Exception as db_error:
                         logger.warning(f"[Ticket {ticket_id}] Could not log error to DB: {db_error}")
                         db.rollback()
@@ -570,25 +546,15 @@ class AttachmentOffloader:
                     s3_keys = [f["s3_key"] for f in result.get("uploaded_files", [])]
                     wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
 
-                    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                    if existing:
-                        existing.processed_at = datetime.utcnow()
-                        existing.attachments_count = uploaded
-                        existing.status = "processed"
-                        existing.error_message = None if not errors else "; ".join(str(e) for e in errors[:3])
-                        if wasabi_files_json:
-                            existing.wasabi_files = wasabi_files_json
-                        existing.wasabi_files_size = size
-                    else:
-                        db.add(ProcessedTicket(
-                            ticket_id=ticket_id,
-                            attachments_count=uploaded,
-                            status="processed",
-                            error_message=None if not errors else "; ".join(str(e) for e in errors[:3]),
-                            wasabi_files=wasabi_files_json,
-                            wasabi_files_size=size,
-                        ))
-                    db.commit()
+                    upsert_processed_ticket(
+                        db,
+                        ticket_id=ticket_id,
+                        attachments_count=uploaded,
+                        status="processed",
+                        error_message=None if not errors else "; ".join(str(e) for e in errors[:3]),
+                        wasabi_files=wasabi_files_json,
+                        wasabi_files_size=size,
+                    )
 
                     stats["newly_processed"] += 1
                     stats["attachments_uploaded"] += uploaded
@@ -606,14 +572,13 @@ class AttachmentOffloader:
                     stats["errors"].append(err)
                     logger.error(f"[Continuous offload] {err}", exc_info=True)
                     try:
-                        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                        if existing:
-                            existing.status = "error"
-                            existing.error_message = str(e)
-                        else:
-                            db.add(ProcessedTicket(ticket_id=ticket_id, attachments_count=0,
-                                                   status="error", error_message=str(e)))
-                        db.commit()
+                        upsert_processed_ticket(
+                            db,
+                            ticket_id=ticket_id,
+                            attachments_count=0,
+                            status="error",
+                            error_message=str(e),
+                        )
                     except Exception:
                         db.rollback()
                 finally:
@@ -828,14 +793,12 @@ class AttachmentOffloader:
                         # Genuinely no attachments (or already offloaded)
                         summary["tickets_genuinely_empty"] += 1
                         # Make sure it's in DB so it won't be rechecked next time
-                        existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                        if not existing:
-                            db.add(ProcessedTicket(
-                                ticket_id=ticket_id,
-                                attachments_count=0,
-                                status="processed",
-                            ))
-                            db.commit()
+                        upsert_processed_ticket(
+                            db,
+                            ticket_id=ticket_id,
+                            attachments_count=0,
+                            status="processed",
+                        )
                         continue
 
                     # Has attachments — process it
@@ -856,29 +819,17 @@ class AttachmentOffloader:
                     s3_keys = [f["s3_key"] for f in result.get("uploaded_files", [])]
                     wasabi_files_json = json.dumps(s3_keys) if s3_keys else None
 
-                    existing = db.query(ProcessedTicket).filter_by(ticket_id=ticket_id).first()
-                    if existing:
-                        existing.processed_at = datetime.utcnow()
-                        existing.attachments_count = result.get("attachments_uploaded", 0)
-                        existing.status = "processed"
-                        existing.error_message = (
+                    upsert_processed_ticket(
+                        db,
+                        ticket_id=ticket_id,
+                        attachments_count=result.get("attachments_uploaded", 0),
+                        status="processed",
+                        error_message=(
                             "; ".join(result.get("errors", [])[:5])
                             if result.get("errors") else None
-                        )
-                        if wasabi_files_json:
-                            existing.wasabi_files = wasabi_files_json
-                    else:
-                        db.add(ProcessedTicket(
-                            ticket_id=ticket_id,
-                            attachments_count=result.get("attachments_uploaded", 0),
-                            status="processed",
-                            error_message=(
-                                "; ".join(result.get("errors", [])[:5])
-                                if result.get("errors") else None
-                            ),
-                            wasabi_files=wasabi_files_json
-                        ))
-                    db.commit()
+                        ),
+                        wasabi_files=wasabi_files_json,
+                    )
 
                     if result.get("errors"):
                         summary["errors"].extend(
