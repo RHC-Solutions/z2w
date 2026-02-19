@@ -39,10 +39,13 @@ class AttachmentOffloader:
         self.wasabi = WasabiClient()
     
     def get_processed_ticket_ids(self) -> set:
-        """Get set of already processed ticket IDs"""
+        """Get set of successfully processed ticket IDs.
+        Tickets with status='error' are excluded so they get retried."""
         db = get_db()
         try:
-            processed = db.query(ProcessedTicket.ticket_id).all()
+            processed = db.query(ProcessedTicket.ticket_id).filter(
+                ProcessedTicket.status != 'error'
+            ).all()
             return {ticket_id[0] for ticket_id in processed}
         finally:
             db.close()
