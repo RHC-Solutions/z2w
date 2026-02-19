@@ -7,7 +7,7 @@ import json
 import logging
 from zendesk_client import ZendeskClient
 from wasabi_client import WasabiClient
-from database import get_db, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot, Setting
+from database import get_db, upsert_processed_ticket, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot, Setting
 from sqlalchemy.exc import IntegrityError
 
 # Get logger
