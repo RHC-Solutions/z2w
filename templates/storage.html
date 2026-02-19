@@ -31,31 +31,103 @@
 </div>
 {% else %}
 
-<div class="stat-grid mb-4">
-  <div class="stat-card primary">
-    <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
-      Tickets with storage
+{# ── Scan progress banner ──────────────────────── #}
+{% if scan_scanned < scan_total %}
+<div class="card mb-4" style="border-color: color-mix(in oklch, var(--warning) 40%, transparent);">
+  <div class="card-body" style="padding:12px 18px; display:flex; align-items:center; gap:14px;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" style="color:var(--warning); animation:spin 1.5s linear infinite; flex-shrink:0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    <div style="flex:1">
+      <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Storage scan in progress</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="flex:1; height:6px; background:var(--muted); border-radius:99px; overflow:hidden;">
+          <div style="height:100%; width:{{ scan_pct }}%; background:var(--warning); border-radius:99px; transition:width .3s;"></div>
+        </div>
+        <span class="text-muted text-sm" style="white-space:nowrap">{{ "{:,}".format(scan_scanned) }} / {{ "{:,}".format(scan_total) }} tickets ({{ scan_pct }}%)</span>
+      </div>
+      <p class="text-muted" style="font-size:11.5px; margin-top:4px">Sizes below reflect only scanned tickets. Full data available once the scan completes.</p>
     </div>
-    <div class="stat-value">{{ "{:,}".format(total_tickets) }}</div>
   </div>
-  <div class="stat-card success">
+</div>
+{% endif %}
+
+{# ── Summary cards — 2 rows ────────────────────── #}
+<div class="stat-grid mb-4" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+  {# Zendesk plan limit #}
+  {% if plan_limit_gb > 0 %}
+  {% set plan_limit_bytes = plan_limit_gb * 1073741824 %}
+  {% set plan_pct = [((total_bytes or 0) / plan_limit_bytes * 100), 100] | min if plan_limit_bytes else 0 %}
+  {% set remaining_bytes = [plan_limit_bytes - (total_bytes or 0), 0] | max %}
+  <div class="stat-card">
     <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-      Total files in Zendesk
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+      Zendesk Plan
     </div>
-    <div class="stat-value">{{ "{:,}".format(total_files or 0) }}</div>
+    <div class="stat-value" style="color:var(--foreground)">{{ plan_limit_gb | int }} GB</div>
+    <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+      <div style="flex:1; height:5px; background:var(--muted); border-radius:99px; overflow:hidden;">
+        <div style="height:100%; width:{{ "%.1f"|format(plan_pct) }}%; background:var(--primary); border-radius:99px;"></div>
+      </div>
+      <span class="text-muted" style="font-size:11px">{{ "%.1f"|format(plan_pct) }}%</span>
+    </div>
+    {% set rem_gb = remaining_bytes / 1073741824 %}
+    <div class="stat-sub">{{ "%.1f"|format(rem_gb) }} GB remaining</div>
   </div>
+  {% else %}
+  <div class="stat-card">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+      Zendesk Plan
+    </div>
+    <div class="text-muted" style="font-size:13px;margin-top:4px">Not configured</div>
+    <div class="stat-sub">Set in <a href="/settings" style="color:var(--primary)">Settings</a></div>
+  </div>
+  {% endif %}
+
+  {# Still in Zendesk #}
   <div class="stat-card danger">
     <div class="stat-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-      Still in Zendesk storage
+      Still in Zendesk
     </div>
     {% set gb = (total_bytes or 0) / 1073741824 %}
     {% if gb >= 1 %}
     <div class="stat-value">{{ "%.2f"|format(gb) }} GB</div>
     {% else %}
     <div class="stat-value">{{ "%.0f"|format((total_bytes or 0) / 1048576) }} MB</div>
+    {% endif %}
+    <div class="stat-sub">{{ "{:,}".format(total_files or 0) }} files · {{ "{:,}".format(total_tickets) }} tickets</div>
+  </div>
+
+  {# Offloaded to Wasabi #}
+  <div class="stat-card success">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+      Offloaded to Wasabi
+    </div>
+    {% set off_gb = (offloaded_bytes or 0) / 1073741824 %}
+    {% if off_gb >= 1 %}
+    <div class="stat-value">{{ "%.2f"|format(off_gb) }} GB</div>
+    {% else %}
+    <div class="stat-value">{{ "%.0f"|format((offloaded_bytes or 0) / 1048576) }} MB</div>
+    {% endif %}
+    <div class="stat-sub">{{ "{:,}".format(offloaded_tickets) }} of {{ "{:,}".format(tickets_with_files) }} tickets with files</div>
+  </div>
+
+  {# Wasabi total storage #}
+  <div class="stat-card primary">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+      Wasabi Total
+    </div>
+    {% if wasabi_stats %}
+      {% if wasabi_stats.total_gb >= 1 %}
+      <div class="stat-value">{{ "%.2f"|format(wasabi_stats.total_gb) }} GB</div>
+      {% else %}
+      <div class="stat-value">{{ "%.1f"|format(wasabi_stats.total_mb or 0) }} MB</div>
+      {% endif %}
+      <div class="stat-sub">{{ "{:,}".format(wasabi_stats.object_count) }} objects</div>
+    {% else %}
+      <div class="text-muted" style="font-size:13px;margin-top:4px">Unavailable</div>
     {% endif %}
   </div>
 </div>
@@ -148,6 +220,9 @@
 
 <div id="refreshStatus" class="mt-3 text-muted text-sm"></div>
 
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
 <script>
 function triggerRefresh() {
   const btn = document.getElementById('btnRefresh');

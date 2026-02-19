@@ -840,6 +840,49 @@ def storage_report():
 
         is_empty = (db.query(ZendeskStorageSnapshot).count() == 0)
 
+        # ── Scan progress ──────────────────────────
+        snap_scanned = db.query(ZendeskStorageSnapshot).count()
+        cache_total = db.query(ZendeskTicketCache).count()
+        scan_pct = round(snap_scanned / cache_total * 100, 1) if cache_total else 0
+
+        # ── Offloaded stats ─────────────────────────
+        offloaded_bytes = db.query(
+            sqlfunc.sum(ProcessedTicket.wasabi_files_size)
+        ).scalar() or 0
+        offloaded_tickets = db.query(ProcessedTicket).filter(
+            ProcessedTicket.wasabi_files_size > 0
+        ).count()
+        tickets_with_files = db.query(ProcessedTicket).filter(
+            ProcessedTicket.attachments_count > 0
+        ).count()
+
+        # ── Plan limit from settings ────────────────
+        limit_row = db.query(Setting).filter_by(key='ZENDESK_STORAGE_LIMIT_GB').first()
+        plan_limit_gb = 0.0
+        if limit_row and limit_row.value:
+            try:
+                plan_limit_gb = float(limit_row.value)
+            except (ValueError, TypeError):
+                pass
+
+        # ── Wasabi stats ────────────────────────────
+        wasabi_stats = None
+        try:
+            from config import WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
+            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
+            w_endpoint = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
+            w_access = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
+            w_secret = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
+            w_bucket = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
+            if all([w_endpoint, w_access, w_secret, w_bucket]):
+                if not w_endpoint.startswith('http'):
+                    w_endpoint = f'https://{w_endpoint}'
+                wc = WasabiClient(endpoint=w_endpoint, access_key=w_access,
+                                  secret_key=w_secret, bucket_name=w_bucket)
+                wasabi_stats = wc.get_storage_stats()
+        except Exception:
+            pass
+
         return render_template(
             'storage.html',
             tickets=tickets_data,
@@ -856,6 +899,14 @@ def storage_report():
             next_run=next_run,
             is_empty=is_empty,
             storage_interval=STORAGE_REPORT_INTERVAL,
+            scan_scanned=snap_scanned,
+            scan_total=cache_total,
+            scan_pct=scan_pct,
+            offloaded_bytes=int(offloaded_bytes),
+            offloaded_tickets=offloaded_tickets,
+            tickets_with_files=tickets_with_files,
+            plan_limit_gb=plan_limit_gb,
+            wasabi_stats=wasabi_stats,
         )
     finally:
         db.close()
