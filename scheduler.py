@@ -66,24 +66,48 @@ class OffloadScheduler:
             logger.info("[StorageSnapshot] Starting storage snapshot refresh…")
             start = datetime.utcnow()
 
+            import re
+            import time as _time
             from database import ZendeskTicketCache
+
+            # ── Load ticket cache as plain Python tuples so they survive
+            #    session close/reopen between batches (no DetachedInstanceError)
             db = get_db()
             try:
-                # Fetch all tickets from cache
-                all_cached = db.query(ZendeskTicketCache).all()
-                logger.info(f"[StorageSnapshot] Scanning {len(all_cached)} cached tickets…")
-                now = datetime.utcnow()
-                updated = 0
-                errors = 0
-                total_size = 0
+                cache_tuples = (
+                    db.query(
+                        ZendeskTicketCache.ticket_id,
+                        ZendeskTicketCache.subject,
+                        ZendeskTicketCache.status,
+                    )
+                    .all()
+                )
+            finally:
+                db.close()
 
-                for cache_row in all_cached:
-                    tid = cache_row.ticket_id
+            total_tickets = len(cache_tuples)
+            logger.info(f"[StorageSnapshot] Scanning {total_tickets} cached tickets…")
+            now = datetime.utcnow()
+            updated = 0
+            errors = 0
+            total_size = 0
+            batch_size = 50
+
+            # Open a fresh DB session for writes
+            db = get_db()
+            try:
+                for idx, (tid, subj, zd_status) in enumerate(cache_tuples):
                     try:
                         # Pull live comment/attachment list from Zendesk
                         url = f"{self.offloader.zendesk.base_url}/tickets/{tid}/comments.json"
                         resp = self.offloader.zendesk.session.get(url, timeout=15)
                         if resp.status_code == 404:
+                            continue
+                        if resp.status_code == 429:
+                            # Rate limited — wait and skip
+                            retry_after = int(resp.headers.get('Retry-After', 10))
+                            logger.warning(f"[StorageSnapshot] Rate limited, sleeping {retry_after}s")
+                            _time.sleep(retry_after)
                             continue
                         if not resp.ok:
                             errors += 1
@@ -93,7 +117,6 @@ class OffloadScheduler:
                         attach_count = 0
                         inline_count = 0
                         ticket_size = 0
-                        import re
                         for c in comments:
                             for a in c.get("attachments", []):
                                 fname = a.get("file_name", "")
@@ -108,11 +131,11 @@ class OffloadScheduler:
 
                         total_size += ticket_size
 
-                        # Upsert row
+                        # Upsert row — use plain values from tuple, not ORM objects
                         row = db.query(ZendeskStorageSnapshot).filter_by(ticket_id=tid).first()
                         if row:
-                            row.subject      = cache_row.subject or ""
-                            row.zd_status    = cache_row.status
+                            row.subject      = subj or ""
+                            row.zd_status    = zd_status
                             row.attach_count = attach_count
                             row.inline_count = inline_count
                             row.total_size   = ticket_size
@@ -121,8 +144,8 @@ class OffloadScheduler:
                         else:
                             db.add(ZendeskStorageSnapshot(
                                 ticket_id    = tid,
-                                subject      = cache_row.subject or "",
-                                zd_status    = cache_row.status,
+                                subject      = subj or "",
+                                zd_status    = zd_status,
                                 attach_count = attach_count,
                                 inline_count = inline_count,
                                 total_size   = ticket_size,
@@ -131,18 +154,46 @@ class OffloadScheduler:
                             ))
                         updated += 1
 
-                        # Commit in smaller batches and release DB lock between them
-                        if updated % 50 == 0:
-                            db.commit()
+                        # Commit in small batches and release DB lock between them
+                        if updated % batch_size == 0:
+                            for _retry in range(3):
+                                try:
+                                    db.commit()
+                                    break
+                                except Exception as ce:
+                                    db.rollback()
+                                    if 'locked' in str(ce).lower() and _retry < 2:
+                                        _time.sleep(1 * (_retry + 1))
+                                        continue
+                                    raise
                             db.close()
                             db = get_db()
-                            logger.info(f"[StorageSnapshot] progress {updated}/{len(all_cached)}…")
+                            logger.info(f"[StorageSnapshot] progress {updated}/{total_tickets}…")
 
                     except Exception as e:
                         errors += 1
-                        logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
+                        if 'locked' in str(e).lower():
+                            logger.warning(f"[StorageSnapshot] ticket {tid}: DB locked, will retry on next run")
+                            db.rollback()
+                        else:
+                            logger.warning(f"[StorageSnapshot] ticket {tid}: {e}")
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
 
-                db.commit()
+                # Final commit
+                for _retry in range(3):
+                    try:
+                        db.commit()
+                        break
+                    except Exception as ce:
+                        db.rollback()
+                        if 'locked' in str(ce).lower() and _retry < 2:
+                            _time.sleep(1 * (_retry + 1))
+                            continue
+                        logger.error(f"[StorageSnapshot] Final commit failed: {ce}")
+
                 elapsed = (datetime.utcnow() - start).total_seconds()
                 logger.info(
                     f"[StorageSnapshot] Done — {updated} tickets scanned, "
@@ -478,7 +529,7 @@ The backup file is being sent to you now...
                 id='storage_snapshot',
                 name=f'Storage Snapshot (every {STORAGE_REPORT_INTERVAL}m)',
                 replace_existing=True,
-                next_run_time=datetime.now() + timedelta(minutes=2)  # stagger: 2min after boot
+                next_run_time=datetime.now() + timedelta(minutes=3)  # stagger: 3min after boot (between offload cycles)
             )
             logger.info(f"Scheduled storage snapshot every {STORAGE_REPORT_INTERVAL} minute(s)")
             

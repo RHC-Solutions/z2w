@@ -62,6 +62,16 @@ class AttachmentOffloader:
             stats["fetched"] = len(all_tickets)
             logger.info(f"Ticket cache sync: fetched {len(all_tickets)} tickets from Zendesk")
 
+            # Parse Zendesk ISO timestamps
+            def _parse_dt(s):
+                if not s:
+                    return None
+                try:
+                    return datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+                except Exception:
+                    return None
+
+            import time as _time
             db = get_db()
             try:
                 now = datetime.utcnow()
@@ -72,16 +82,8 @@ class AttachmentOffloader:
                         if not tid:
                             continue
 
-                        # Parse Zendesk ISO timestamps
-                        def _parse_dt(s):
-                            if not s:
-                                return None
-                            try:
-                                return datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
-                            except Exception:
-                                return None
-
-                        row = db.query(ZendeskTicketCache).filter_by(ticket_id=tid).first()
+                        with db.no_autoflush:
+                            row = db.query(ZendeskTicketCache).filter_by(ticket_id=tid).first()
                         if row:
                             row.subject = t.get("subject") or ""
                             row.status = t.get("status")
@@ -111,9 +113,21 @@ class AttachmentOffloader:
                             ))
                             stats["inserted"] += 1
 
-                        # Commit in batches to avoid one huge transaction
+                        # Commit in batches and release DB lock between them
                         if (i + 1) % batch_size == 0:
-                            db.commit()
+                            for _retry in range(3):
+                                try:
+                                    db.commit()
+                                    break
+                                except Exception as ce:
+                                    db.rollback()
+                                    if 'locked' in str(ce).lower() and _retry < 2:
+                                        _time.sleep(1 * (_retry + 1))
+                                        continue
+                                    raise
+                            # Release connection between batches so other threads can write
+                            db.close()
+                            db = get_db()
                             logger.info(f"Cache sync progress: {i + 1}/{len(all_tickets)}")
                             if progress_callback:
                                 progress_callback(i + 1, len(all_tickets), tid)
@@ -121,9 +135,23 @@ class AttachmentOffloader:
                     except Exception as e:
                         stats["errors"] += 1
                         logger.warning(f"Cache sync error for ticket {t.get('id')}: {e}")
-                        db.rollback()
+                        try:
+                            db.rollback()
+                        except Exception:
+                            db.close()
+                            db = get_db()
 
-                db.commit()
+                # Final commit with retry
+                for _retry in range(3):
+                    try:
+                        db.commit()
+                        break
+                    except Exception as ce:
+                        db.rollback()
+                        if 'locked' in str(ce).lower() and _retry < 2:
+                            _time.sleep(1 * (_retry + 1))
+                            continue
+                        logger.error(f"Cache sync final commit failed: {ce}")
             finally:
                 db.close()
 
