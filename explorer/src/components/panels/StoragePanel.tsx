@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Cloud, Database, AlertTriangle } from "lucide-react";
+import { RefreshCw, Cloud, Database, AlertTriangle, ArrowDownToLine, HardDrive } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,17 @@ interface StorageReport {
     total_bytes: number;
     by_status: Record<string, { tickets: number; files: number; bytes: number }>;
   };
+  scan: {
+    scanned: number;
+    total: number;
+    pct: number;
+  };
+  offloaded: {
+    bytes: number;
+    tickets: number;
+    tickets_with_files: number;
+  };
+  plan_limit_gb: number;
   last_updated: string | null;
   next_run: string | null;
   is_empty: boolean;
@@ -95,7 +106,6 @@ export function StoragePanel({ creds }: Props) {
     setRefreshing(true);
     try {
       await z2wFetch("/api/storage_report/refresh", { method: "POST" });
-      // Poll for results
       await new Promise((r) => setTimeout(r, 3000));
       await loadReport();
     } catch { /* ignore */ } finally {
@@ -106,22 +116,114 @@ export function StoragePanel({ creds }: Props) {
   const filteredRows = report?.rows.filter((r) => activeTab === "all" || r.zd_status === activeTab) ?? [];
   const statusTabs = ["all", "open", "pending", "solved", "closed"];
 
+  // Compute plan usage
+  const planLimitBytes = (report?.plan_limit_gb ?? 0) * 1024 * 1024 * 1024;
+  const zdUsedBytes = report?.summary.total_bytes ?? 0;
+  const planPct = planLimitBytes > 0 ? Math.min(zdUsedBytes / planLimitBytes * 100, 100) : 0;
+  const remainingBytes = planLimitBytes > 0 ? Math.max(planLimitBytes - zdUsedBytes, 0) : 0;
+
   return (
     <div className="space-y-4">
+      {/* Scan progress banner */}
+      {report && report.scan.scanned < report.scan.total && (
+        <Card className="border-yellow-500/40 bg-yellow-500/5">
+          <CardContent className="py-3 flex items-center gap-3">
+            <RefreshCw className="h-4 w-4 text-yellow-600 animate-spin" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">Storage scan in progress</p>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-500 rounded-full transition-all"
+                    style={{ width: `${report.scan.pct}%` }}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                  {report.scan.scanned.toLocaleString()} / {report.scan.total.toLocaleString()} tickets ({report.scan.pct}%)
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Sizes below reflect only scanned tickets. Full data available once the scan completes.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Zendesk plan storage */}
+        {report && report.plan_limit_gb > 0 ? (
+          <Card>
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardDescription className="text-xs flex items-center gap-1">
+                <HardDrive className="h-3 w-3" /> Zendesk plan
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="px-4 pb-3">
+              <p className="text-xl font-bold">{report.plan_limit_gb} GB</p>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full"
+                    style={{ width: `${planPct}%` }}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">{planPct.toFixed(1)}%</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {formatBytes(remainingBytes)} remaining
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardDescription className="text-xs flex items-center gap-1">
+                <HardDrive className="h-3 w-3" /> Zendesk plan
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="px-4 pb-3">
+              <p className="text-sm text-muted-foreground">Not configured</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Set in <a href="/settings" target="_top" className="text-primary underline">Settings</a>
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Zendesk storage still in use */}
         <Card>
           <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs flex items-center gap-1"><Database className="h-3 w-3" /> Zendesk storage in use</CardDescription>
+            <CardDescription className="text-xs flex items-center gap-1"><Database className="h-3 w-3" /> Still in Zendesk</CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-3">
             <p className="text-xl font-bold text-destructive">{report ? formatBytes(report.summary.total_bytes) : "–"}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{report?.summary.total_files ?? "–"} files · {report?.summary.total_tickets ?? "–"} tickets</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {report?.summary.total_files ?? "–"} files · {report?.summary.total_tickets ?? "–"} tickets
+            </p>
           </CardContent>
         </Card>
+
+        {/* Offloaded to Wasabi (freed from Zendesk) */}
         <Card>
           <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs flex items-center gap-1"><Cloud className="h-3 w-3" /> Wasabi storage used</CardDescription>
+            <CardDescription className="text-xs flex items-center gap-1"><ArrowDownToLine className="h-3 w-3" /> Offloaded to Wasabi</CardDescription>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <p className="text-xl font-bold text-green-600">
+              {report ? formatBytes(report.offloaded.bytes) : "–"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {report?.offloaded.tickets ?? "–"} of {report?.offloaded.tickets_with_files.toLocaleString() ?? "–"} tickets with files
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Wasabi total storage */}
+        <Card>
+          <CardHeader className="pb-1 pt-3 px-4">
+            <CardDescription className="text-xs flex items-center gap-1"><Cloud className="h-3 w-3" /> Wasabi total</CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-3">
             <p className="text-xl font-bold text-primary">
@@ -130,26 +232,16 @@ export function StoragePanel({ creds }: Props) {
             <p className="text-xs text-muted-foreground mt-0.5">{wasabi?.object_count?.toLocaleString() ?? "–"} objects</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs">Last scanned</CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 pb-3">
-            <p className="text-sm font-semibold">{report?.last_updated ? formatDate(report.last_updated) : "–"}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-1 pt-3 px-4">
-            <CardDescription className="text-xs">Next scan</CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 pb-3 flex items-start justify-between">
-            <p className="text-sm font-semibold">{report?.next_run ? formatDate(report.next_run) : "–"}</p>
-            <Button size="sm" variant="secondary" className="h-6 text-xs px-2 gap-1" onClick={handleRefresh} disabled={refreshing}>
-              <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
-              {refreshing ? "…" : "Now"}
-            </Button>
-          </CardContent>
-        </Card>
+      </div>
+
+      {/* Last scanned / Next scan row */}
+      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+        <span>Last scanned: <b className="text-foreground">{report?.last_updated ? formatDate(report.last_updated) : "–"}</b></span>
+        <span>Next scan: <b className="text-foreground">{report?.next_run ? formatDate(report.next_run) : "–"}</b></span>
+        <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 ml-auto" onClick={handleRefresh} disabled={refreshing}>
+          <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
+          {refreshing ? "Scanning…" : "Scan Now"}
+        </Button>
       </div>
 
       {error && (
@@ -163,7 +255,7 @@ export function StoragePanel({ creds }: Props) {
       {report?.is_empty && (
         <Card>
           <CardContent className="pt-6 text-sm text-muted-foreground">
-            Storage scan is in progress. Data will appear once the first scan completes.
+            Storage scan has not started yet. Click <b>Scan Now</b> to begin, or wait for the next scheduled run.
           </CardContent>
         </Card>
       )}

@@ -914,7 +914,30 @@ def storage_report_json():
         except Exception:
             pass
 
-        is_empty = (db.query(ZendeskStorageSnapshot).count() == 0)
+        # Scan progress: how many tickets scanned vs total in cache
+        snap_scanned = db.query(ZendeskStorageSnapshot).count()
+        cache_total = db.query(ZendeskTicketCache).count()
+        is_empty = (snap_scanned == 0)
+
+        # Offloaded stats from ProcessedTicket
+        offloaded_bytes = db.query(
+            sqlfunc.sum(ProcessedTicket.wasabi_files_size)
+        ).scalar() or 0
+        offloaded_tickets = db.query(ProcessedTicket).filter(
+            ProcessedTicket.wasabi_files_size > 0
+        ).count()
+        tickets_with_files = db.query(ProcessedTicket).filter(
+            ProcessedTicket.attachments_count > 0
+        ).count()
+
+        # Plan limit from settings
+        limit_row = db.query(Setting).filter_by(key='ZENDESK_STORAGE_LIMIT_GB').first()
+        plan_limit_gb = 0.0
+        if limit_row and limit_row.value:
+            try:
+                plan_limit_gb = float(limit_row.value)
+            except (ValueError, TypeError):
+                pass
 
         return jsonify({
             'rows': [{
@@ -932,6 +955,17 @@ def storage_report_json():
                 'total_bytes': int(totals.total_bytes or 0),
                 'by_status': by_status,
             },
+            'scan': {
+                'scanned': snap_scanned,
+                'total': cache_total,
+                'pct': round(snap_scanned / cache_total * 100, 1) if cache_total else 0,
+            },
+            'offloaded': {
+                'bytes': int(offloaded_bytes),
+                'tickets': offloaded_tickets,
+                'tickets_with_files': tickets_with_files,
+            },
+            'plan_limit_gb': plan_limit_gb,
             'last_updated': last_updated.isoformat() if last_updated else None,
             'next_run': next_run,
             'is_empty': is_empty,
