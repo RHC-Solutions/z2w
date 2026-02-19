@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, ExternalLink, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { zendeskFetch, formatDate, getSubdomain } from "@/lib/api";
+import { zendeskFetch, formatBytes, formatDate, getSubdomain, z2wFetch } from "@/lib/api";
 import type { StoredCreds } from "@/lib/storage";
 
 interface Ticket {
@@ -57,6 +56,7 @@ export function TicketsPanel({ creds }: Props) {
   const [searchInput, setSearchInput] = useState("");
   const [sortBy, setSortBy] = useState<"id" | "created_at" | "updated_at" | "status">("id");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sizeMap, setSizeMap] = useState<Record<string, number>>({});
 
   const connected = Boolean(creds?.subdomain && creds?.token);
 
@@ -72,8 +72,18 @@ export function TicketsPanel({ creds }: Props) {
         tickets: Ticket[];
         count: number;
       };
-      setTickets(data.tickets || []);
+      const tix = data.tickets || [];
+      setTickets(tix);
       setTotalCount(data.count || 0);
+
+      // Fetch sizes from backend storage snapshot
+      if (tix.length > 0) {
+        try {
+          const ids = tix.map((t) => t.id).join(",");
+          const sizes = (await z2wFetch(`/api/ticket_sizes?ids=${ids}`)) as Record<string, number>;
+          setSizeMap((prev) => ({ ...prev, ...sizes }));
+        } catch { /* sizes are optional */ }
+      }
     } catch (e) {
       setError(String(e));
       setTickets([]);
@@ -175,9 +185,9 @@ export function TicketsPanel({ creds }: Props) {
                 <TableHead className="w-20">ID</TableHead>
                 <TableHead>Subject</TableHead>
                 <TableHead className="w-24">Status</TableHead>
+                <TableHead className="w-24">Size</TableHead>
                 <TableHead className="w-36">Created</TableHead>
                 <TableHead className="w-36">Updated</TableHead>
-                <TableHead className="w-10"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -191,26 +201,39 @@ export function TicketsPanel({ creds }: Props) {
                   <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No tickets</TableCell>
                 </TableRow>
               )}
-              {!loading && tickets.map((t) => (
-                <TableRow key={t.id} className="text-sm">
-                  <TableCell className="font-mono text-xs text-muted-foreground">#{t.id}</TableCell>
-                  <TableCell className="max-w-xs truncate">{t.subject || "(no subject)"}</TableCell>
-                  <TableCell>
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[t.status] || ""}`}>
-                      {t.status}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{formatDate(t.created_at)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{formatDate(t.updated_at)}</TableCell>
-                  <TableCell>
-                    {ticketUrl && (
-                      <a href={`${ticketUrl}${t.id}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80">
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {!loading && tickets.map((t) => {
+                const sizeBytes = sizeMap[String(t.id)] ?? null;
+                return (
+                  <TableRow key={t.id} className="text-sm">
+                    <TableCell className="font-mono text-xs">
+                      {ticketUrl ? (
+                        <a href={`${ticketUrl}${t.id}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                          #{t.id}
+                        </a>
+                      ) : `#${t.id}`}
+                    </TableCell>
+                    <TableCell className="max-w-xs truncate">
+                      {ticketUrl ? (
+                        <a href={`${ticketUrl}${t.id}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-primary">
+                          {t.subject || "(no subject)"}
+                        </a>
+                      ) : (t.subject || "(no subject)")}
+                    </TableCell>
+                    <TableCell>
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[t.status] || ""}`}>
+                        {t.status}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {sizeBytes != null && sizeBytes > 0
+                        ? <span className="text-destructive font-medium">{formatBytes(sizeBytes)}</span>
+                        : <span className="text-muted-foreground/50">–</span>}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDate(t.created_at)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{formatDate(t.updated_at)}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </Card>

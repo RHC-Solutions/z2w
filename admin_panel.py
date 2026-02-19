@@ -1043,6 +1043,31 @@ def storage_report_json():
         db.close()
 
 
+@app.route('/api/ticket_sizes')
+@login_required
+def ticket_sizes_json():
+    """Return {ticket_id: total_size_bytes} for a list of ticket IDs.
+    Query param: ids=1,2,3 (comma-separated). Used by Explorer Tickets panel."""
+    ids_raw = request.args.get('ids', '').strip()
+    if not ids_raw:
+        return jsonify({})
+    try:
+        ticket_ids = [int(x) for x in ids_raw.split(',') if x.strip().isdigit()]
+    except ValueError:
+        return jsonify({})
+    if not ticket_ids:
+        return jsonify({})
+    db = get_db()
+    try:
+        rows = db.query(
+            ZendeskStorageSnapshot.ticket_id,
+            ZendeskStorageSnapshot.total_size,
+        ).filter(ZendeskStorageSnapshot.ticket_id.in_(ticket_ids)).all()
+        return jsonify({str(r.ticket_id): r.total_size or 0 for r in rows})
+    finally:
+        db.close()
+
+
 @app.route('/api/wasabi_stats')
 @login_required
 def wasabi_stats_json():
