@@ -934,7 +934,7 @@ def storage_report_refresh():
 @app.route('/ticket_backup')
 @login_required
 def ticket_backup():
-    """Closed-ticket backup status page with search/sort/filter."""
+    """Closed-ticket backup status page — shows ALL closed tickets (LEFT JOIN backup items)."""
     db = get_db()
     try:
         page = request.args.get('page', 1, type=int)
@@ -944,42 +944,16 @@ def ticket_backup():
         sort_order = request.args.get('order', 'desc')
         per_page = 50
 
-        from sqlalchemy import func as sqlfunc
+        from sqlalchemy import func as sqlfunc, outerjoin, literal
 
-        sort_map = {
-            'ticket_id':     TicketBackupItem.ticket_id,
-            'closed_at':     TicketBackupItem.closed_at,
-            'backup_status': TicketBackupItem.backup_status,
-            'last_backup_at': TicketBackupItem.last_backup_at,
-            'files_count':   TicketBackupItem.files_count,
-            'total_bytes':   TicketBackupItem.total_bytes,
-        }
-        sort_col = sort_map.get(sort_by, TicketBackupItem.ticket_id)
-        order_fn = desc if sort_order == 'desc' else asc
-
-        base_q = db.query(TicketBackupItem)
-        if search_query:
-            lp = f"%{search_query}%"
-            base_q = base_q.filter(
-                or_(
-                    cast(TicketBackupItem.ticket_id, String).like(lp),
-                    TicketBackupItem.backup_status.like(lp),
-                    TicketBackupItem.s3_prefix.like(lp),
-                    TicketBackupItem.last_error.like(lp),
-                )
-            )
-        if status_filter:
-            base_q = base_q.filter(TicketBackupItem.backup_status == status_filter)
-
-        # Counts per status
+        # ── aggregate counts from backup items ───────────────────────────
         status_counts = {}
         for row in db.query(TicketBackupItem.backup_status, sqlfunc.count(TicketBackupItem.id))\
                       .group_by(TicketBackupItem.backup_status).all():
             status_counts[row[0] or ''] = row[1]
 
-        total_items = sum(status_counts.values())
         success_count = status_counts.get('success', 0)
-        failed_count = status_counts.get('failed', 0)
+        failed_count  = status_counts.get('failed', 0)
         pending_count = status_counts.get('pending', 0)
         skipped_count = status_counts.get('skipped', 0)
 
@@ -990,29 +964,89 @@ def ticket_backup():
             TicketBackupItem.backup_status == 'success'
         ).scalar() or 0
 
-        # Closed tickets not yet tracked
         closed_cache_count = db.query(sqlfunc.count(ZendeskTicketCache.ticket_id)).filter(
             ZendeskTicketCache.status == 'closed'
         ).scalar() or 0
 
-        # Paginate filtered query
-        total_rows = base_q.count()
-        rows = base_q.order_by(order_fn(sort_col)).offset((page - 1) * per_page).limit(per_page).all()
+        # ── LEFT JOIN: all closed cache tickets + their backup item (if any) ──
+        # We build a combined list using a raw SQL approach for simplicity
+        from sqlalchemy import text as sa_text
+
+        sort_col_sql = {
+            'ticket_id':      'c.ticket_id',
+            'closed_at':      'b.closed_at',
+            'backup_status':  "COALESCE(b.backup_status, 'pending')",
+            'last_backup_at': 'b.last_backup_at',
+            'files_count':    'COALESCE(b.files_count, 0)',
+            'total_bytes':    'COALESCE(b.total_bytes, 0)',
+        }.get(sort_by, 'c.ticket_id')
+        order_dir = 'DESC' if sort_order == 'desc' else 'ASC'
+
+        where_clauses = ["c.status = 'closed'"]
+        params = {}
+
+        if search_query:
+            where_clauses.append(
+                "(CAST(c.ticket_id AS TEXT) LIKE :sq "
+                "OR COALESCE(b.backup_status,'pending') LIKE :sq "
+                "OR COALESCE(b.s3_prefix,'') LIKE :sq "
+                "OR COALESCE(b.last_error,'') LIKE :sq)"
+            )
+            params['sq'] = f'%{search_query}%'
+
+        if status_filter:
+            if status_filter == 'pending':
+                where_clauses.append("b.ticket_id IS NULL")
+            else:
+                where_clauses.append("b.backup_status = :sf")
+                params['sf'] = status_filter
+
+        where_sql = ' AND '.join(where_clauses)
+
+        count_sql = sa_text(
+            f"SELECT COUNT(*) FROM zendesk_ticket_cache c "
+            f"LEFT JOIN ticket_backup_items b ON c.ticket_id = b.ticket_id "
+            f"WHERE {where_sql}"
+        )
+        total_rows = db.execute(count_sql, params).scalar() or 0
+
+        data_sql = sa_text(
+            f"SELECT c.ticket_id, c.subject, "
+            f"  b.closed_at, b.last_backup_at, "
+            f"  COALESCE(b.backup_status, 'pending') AS backup_status, "
+            f"  COALESCE(b.files_count, 0) AS files_count, "
+            f"  COALESCE(b.total_bytes, 0) AS total_bytes, "
+            f"  COALESCE(b.s3_prefix, '') AS s3_prefix, "
+            f"  COALESCE(b.last_error, '') AS last_error "
+            f"FROM zendesk_ticket_cache c "
+            f"LEFT JOIN ticket_backup_items b ON c.ticket_id = b.ticket_id "
+            f"WHERE {where_sql} "
+            f"ORDER BY {sort_col_sql} {order_dir} "
+            f"LIMIT :lim OFFSET :off"
+        )
+        params['lim'] = per_page
+        params['off'] = (page - 1) * per_page
+        rows = db.execute(data_sql, params).fetchall()
+
+        # pending = closed tickets with no backup item
+        pending_count = closed_cache_count - success_count - failed_count - skipped_count
+        status_counts['pending'] = max(0, pending_count)
 
         # Last run info
         last_run = db.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
 
         items_data = []
-        for item in rows:
+        for row in rows:
             items_data.append({
-                'ticket_id': item.ticket_id,
-                'closed_at': item.closed_at,
-                'last_backup_at': item.last_backup_at,
-                'backup_status': item.backup_status or 'pending',
-                'files_count': item.files_count or 0,
-                'total_bytes': item.total_bytes or 0,
-                's3_prefix': item.s3_prefix or '',
-                'last_error': item.last_error or '',
+                'ticket_id':     row.ticket_id,
+                'subject':       row.subject or '',
+                'closed_at':     row.closed_at,
+                'last_backup_at': row.last_backup_at,
+                'backup_status': row.backup_status,
+                'files_count':   row.files_count or 0,
+                'total_bytes':   row.total_bytes or 0,
+                's3_prefix':     row.s3_prefix or '',
+                'last_error':    row.last_error or '',
             })
 
         class Pagination:
@@ -1069,6 +1103,26 @@ def ticket_backup_now():
         return jsonify({'success': True, 'message': 'Closed-ticket backup started in background.'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/ticket_backup_backfill_html', methods=['POST'])
+@login_required
+def ticket_backup_backfill_html():
+    """Backfill HTML exports for tickets that only have JSON in the bucket."""
+    import threading
+    from ticket_backup_manager import TicketBackupManager
+
+    def _run():
+        try:
+            mgr = TicketBackupManager()
+            result = mgr.backfill_html()
+            logger.info(f"[BackfillHTML] Completed: {result}")
+        except Exception as exc:
+            logger.error(f"[BackfillHTML] Failed: {exc}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True, name='backfill_html')
+    t.start()
+    return jsonify({'success': True, 'message': 'HTML backfill started in background — check logs for progress.'})
 
 
 @app.route('/api/ticket_backup_status')

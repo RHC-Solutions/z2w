@@ -155,12 +155,39 @@ class OffloadScheduler:
             finally:
                 db.close()
 
+            import calendar
+            # Use UTC-based unix timestamp to avoid local-clock/DST issues
+            run_start_ts = calendar.timegm(start.utctimetuple())
+
+            # Treat future-dated or invalid timestamps as missing (force full scan)
+            now_utc_ts = run_start_ts
+            if last_ts is not None and last_ts > now_utc_ts:
+                logger.warning(
+                    f"[StorageSnapshot] Stored timestamp {last_ts} is in the future "
+                    f"(now={now_utc_ts}) — resetting to force full scan"
+                )
+                last_ts = None
+
             is_full_scan = last_ts is None
-            run_start_ts = math.floor(start.timestamp())
 
             if is_full_scan:
                 # ── FULL SCAN (first run / forced) ────────────────────────
                 logger.info("[StorageSnapshot] No previous timestamp — running FULL scan")
+                # Persist timestamp NOW so a restart mid-scan won't trigger a second full scan
+                db = get_db()
+                try:
+                    _guard = db.query(Setting).filter_by(key=SETTING_KEY).first()
+                    if _guard is None:
+                        db.add(Setting(key=SETTING_KEY, value=str(run_start_ts),
+                                       description='Unix timestamp of last successful storage snapshot run'))
+                    else:
+                        _guard.value = str(run_start_ts)
+                    db.commit()
+                except Exception as _e:
+                    logger.warning(f"[StorageSnapshot] Could not pre-save timestamp: {_e}")
+                    db.rollback()
+                finally:
+                    db.close()
                 db = get_db()
                 try:
                     cache_tuples = (

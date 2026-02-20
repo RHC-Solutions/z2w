@@ -4,6 +4,10 @@
 {% block page_sub %}Archive closed Zendesk tickets to Wasabi S3{% endblock %}
 {% block topbar_actions %}
 <span id="jobStatus" class="text-sm text-muted"></span>
+<button class="btn btn-secondary btn-sm" onclick="runBackfillHtml()" id="backfillBtn" title="Generate missing HTML exports for tickets already backed up">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+  Backfill HTML
+</button>
 <button class="btn btn-primary btn-sm" onclick="runBackupNow()" id="runBtn">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
   Run Backup Now
@@ -88,6 +92,7 @@
       <tr>
         {% set toggle = 'asc' if (sort == 'ticket_id' and order == 'desc') else 'desc' %}
         <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=ticket_id&order={{ toggle }}">Ticket {{ '▼' if sort=='ticket_id' and order=='desc' else ('▲' if sort=='ticket_id' else '') }}</a></th>
+        <th>Subject</th>
         {% set toggle = 'asc' if (sort == 'backup_status' and order == 'desc') else 'desc' %}
         <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=backup_status&order={{ toggle }}">Status {{ '▼' if sort=='backup_status' and order=='desc' else ('▲' if sort=='backup_status' else '') }}</a></th>
         {% set toggle = 'asc' if (sort == 'closed_at' and order == 'desc') else 'desc' %}
@@ -106,6 +111,7 @@
       {% for item in items %}
       <tr>
         <td><a href="https://{{ subdomain }}.zendesk.com/agent/tickets/{{ item.ticket_id }}" target="_blank" style="color:var(--primary);text-decoration:none">#{{ item.ticket_id }}</a></td>
+        <td class="text-sm" style="max-width:260px" title="{{ item.subject }}">{{ item.subject[:60] }}{% if item.subject|length > 60 %}…{% endif %}</td>
         <td>
           {% if item.backup_status == 'success' %}<span class="badge badge-success">success</span>
           {% elif item.backup_status == 'failed' %}<span class="badge badge-danger">failed</span>
@@ -125,7 +131,7 @@
         <td class="text-xs text-destructive truncate" style="max-width:200px" title="{{ item.last_error }}">{{ item.last_error[:80] if item.last_error else '' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="text-center text-muted" style="padding:40px">No backup records yet. Click <b>Run Backup Now</b> to start.</td></tr>
+      <tr><td colspan="9" class="text-center text-muted" style="padding:40px">No backup records yet. Click <b>Run Backup Now</b> to start.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -158,6 +164,20 @@
 
 {% block scripts %}
 <script>
+function runBackfillHtml() {
+  const btn = document.getElementById('backfillBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting…';
+  fetch('/api/ticket_backup_backfill_html', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      btn.disabled = false;
+      btn.innerHTML = 'Backfill HTML';
+    })
+    .catch(() => { showToast('Request failed','danger'); btn.disabled = false; btn.innerHTML = 'Backfill HTML'; });
+}
+
 function runBackupNow() {
   const btn = document.getElementById('runBtn');
   btn.disabled = true;
