@@ -81,6 +81,35 @@ class Setting(Base):
     description = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class TicketBackupRun(Base):
+    """Track each closed-ticket backup scheduler run"""
+    __tablename__ = 'ticket_backup_runs'
+
+    id = Column(Integer, primary_key=True)
+    run_date = Column(DateTime, default=datetime.utcnow, index=True)
+    tickets_scanned = Column(Integer, default=0)
+    tickets_backed_up = Column(Integer, default=0)
+    files_uploaded = Column(Integer, default=0)
+    bytes_uploaded = Column(BigInteger, default=0)
+    errors_count = Column(Integer, default=0)
+    status = Column(String(50), default='completed')
+    details = Column(Text, nullable=True)
+
+class TicketBackupItem(Base):
+    """Per-ticket closed-ticket backup status for search/filter/reporting"""
+    __tablename__ = 'ticket_backup_items'
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, unique=True, nullable=False, index=True)
+    closed_at = Column(DateTime, nullable=True)
+    last_backup_at = Column(DateTime, nullable=True, index=True)
+    backup_status = Column(String(50), default='pending', index=True)  # pending/success/failed/skipped
+    s3_prefix = Column(Text, nullable=True)
+    files_count = Column(Integer, default=0)
+    total_bytes = Column(BigInteger, default=0)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 # Database setup
 # NullPool: every Session gets its own connection that is immediately closed when
 # the session closes — no pooled connections sitting idle and holding read locks
@@ -154,6 +183,22 @@ def _migrate_database():
             print("Created zendesk_storage_snapshot table")
         except Exception as e:
             print(f"Note: Could not create zendesk_storage_snapshot table: {e}")
+
+    # ── ticket_backup_runs: create if missing ───────────────────────────────
+    if 'ticket_backup_runs' not in inspector.get_table_names():
+        try:
+            TicketBackupRun.__table__.create(engine)
+            print("Created ticket_backup_runs table")
+        except Exception as e:
+            print(f"Note: Could not create ticket_backup_runs table: {e}")
+
+    # ── ticket_backup_items: create if missing ──────────────────────────────
+    if 'ticket_backup_items' not in inspector.get_table_names():
+        try:
+            TicketBackupItem.__table__.create(engine)
+            print("Created ticket_backup_items table")
+        except Exception as e:
+            print(f"Note: Could not create ticket_backup_items table: {e}")
 
 def get_db():
     """Get database session"""

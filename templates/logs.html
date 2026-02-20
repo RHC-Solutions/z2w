@@ -4,16 +4,46 @@
 {% block page_sub %}Full history of all offload runs{% endblock %}
 
 {% block content %}
+<form method="GET" action="{{ url_for('logs') }}" class="flex flex-wrap gap-2 mb-4">
+  <input type="text" class="form-control" name="q" value="{{ q or '' }}" placeholder="Search details…" style="max-width:280px">
+  <select name="status" class="form-select" style="max-width:160px">
+    <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+    {% for s in all_statuses %}
+    <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s | capitalize }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="sort"  value="{{ sort  or 'run_date' }}">
+  <input type="hidden" name="order" value="{{ order or 'desc' }}">
+  <button type="submit" class="btn btn-primary btn-sm">Search</button>
+  <a href="{{ url_for('logs') }}" class="btn btn-outline btn-sm">Clear</a>
+</form>
+
+<div class="text-muted text-sm mb-3">
+  Showing {{ logs.items | length }} of {{ logs.total }} log(s){% if q %} matching <strong>{{ q }}</strong>{% endif %}{% if status_filter %} · status: <strong>{{ status_filter }}</strong>{% endif %}
+</div>
+
+{% macro sort_link(col, label) %}
+  {% set cur_sort  = sort  or 'run_date' %}
+  {% set cur_order = order or 'desc' %}
+  {% if cur_sort == col %}
+    {% set next_order = 'asc' if cur_order == 'desc' else 'desc' %}
+    {% set icon = '↑' if cur_order == 'asc' else '↓' %}
+  {% else %}
+    {% set next_order = 'desc' %}{% set icon = '↕' %}
+  {% endif %}
+  <a href="?sort={{ col }}&order={{ next_order }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ label }} <span class="text-muted">{{ icon }}</span></a>
+{% endmacro %}
+
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
-        <th>Run Date</th>
-        <th>Tickets</th>
-        <th>Attachments</th>
+        <th>{{ sort_link('run_date','Run Date') }}</th>
+        <th>{{ sort_link('tickets_processed','Tickets') }}</th>
+        <th>{{ sort_link('attachments_uploaded','Attachments') }}</th>
         <th>Wasabi Files</th>
-        <th>Errors</th>
-        <th>Status</th>
+        <th>{{ sort_link('errors_count','Errors') }}</th>
+        <th>{{ sort_link('status','Status') }}</th>
         <th>Report</th>
       </tr>
     </thead>
@@ -47,16 +77,20 @@
           {% endif %}
         </td>
       </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-muted text-center" style="padding:24px">No logs found.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+
+{% set qs = ('&q=' + q|urlencode if q else '') + ('&status=' + status_filter if status_filter else '') + '&sort=' + (sort or 'run_date') + '&order=' + (order or 'desc') %}
 <nav class="pagination">
-  {% if logs.has_prev %}<a class="page-link" href="?page={{ logs.prev_num }}">← Prev</a>{% endif %}
+  {% if logs.has_prev %}<a class="page-link" href="?page={{ logs.prev_num }}{{ qs }}">← Prev</a>{% endif %}
   {% for pn in logs.iter_pages() %}
-    {% if pn %}<a class="page-link {{ 'active' if pn == logs.page else '' }}" href="?page={{ pn }}">{{ pn }}</a>
+    {% if pn %}<a class="page-link {{ 'active' if pn == logs.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
     {% else %}<span class="page-link disabled">…</span>{% endif %}
   {% endfor %}
-  {% if logs.has_next %}<a class="page-link" href="?page={{ logs.next_num }}">Next →</a>{% endif %}
+  {% if logs.has_next %}<a class="page-link" href="?page={{ logs.next_num }}{{ qs }}">Next →</a>{% endif %}
 </nav>
 {% endblock %}

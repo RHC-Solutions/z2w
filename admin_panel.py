@@ -1226,12 +1226,41 @@ def logs():
                 pass
         
         page = request.args.get('page', 1, type=int)
+        search_query = (request.args.get('q', '') or '').strip()
+        status_filter = (request.args.get('status', '') or '').strip()
+        sort_by = request.args.get('sort', 'run_date')
+        sort_order = request.args.get('order', 'desc')
         per_page = 20
-        
+
+        # Allowed sort columns
+        sort_columns = {
+            'run_date': OffloadLog.run_date,
+            'tickets_processed': OffloadLog.tickets_processed,
+            'attachments_uploaded': OffloadLog.attachments_uploaded,
+            'errors_count': OffloadLog.errors_count,
+            'status': OffloadLog.status,
+        }
+        sort_col = sort_columns.get(sort_by, OffloadLog.run_date)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        # Build query with optional filters
+        base_query = db.query(OffloadLog)
+        if search_query:
+            like_pattern = f"%{search_query}%"
+            base_query = base_query.filter(
+                or_(
+                    cast(OffloadLog.tickets_processed, String).like(like_pattern),
+                    OffloadLog.status.like(like_pattern),
+                    OffloadLog.details.like(like_pattern),
+                )
+            )
+        if status_filter:
+            base_query = base_query.filter(OffloadLog.status == status_filter)
+
         # Manual pagination
-        total = db.query(OffloadLog).count()
-        logs_query = db.query(OffloadLog).order_by(
-            OffloadLog.run_date.desc()
+        total = base_query.count()
+        logs_query = base_query.order_by(
+            order_fn(sort_col)
         ).offset((page - 1) * per_page).limit(per_page).all()
         
         # Generate URLs for each log's files
@@ -1293,8 +1322,13 @@ def logs():
                         yield num
         
         logs = Pagination(page, per_page, total, logs_query)
-        
-        return render_template('logs.html', logs=logs)
+
+        # Collect distinct statuses for filter dropdown
+        all_statuses = [r[0] for r in db.query(OffloadLog.status).distinct().all() if r[0]]
+
+        return render_template('logs.html', logs=logs, q=search_query,
+                               status_filter=status_filter, sort=sort_by, order=sort_order,
+                               all_statuses=sorted(all_statuses))
     finally:
         db.close()
 

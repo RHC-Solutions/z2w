@@ -47,6 +47,13 @@ RECHECK_HOUR = int(os.getenv("RECHECK_HOUR", "2"))
 CONTINUOUS_OFFLOAD_INTERVAL = int(os.getenv("CONTINUOUS_OFFLOAD_INTERVAL", "5"))  # minutes
 STORAGE_REPORT_INTERVAL = int(os.getenv("STORAGE_REPORT_INTERVAL", "60"))  # minutes between storage report refreshes
 
+# Closed Ticket Backup Configuration (separate scheduler/job)
+TICKET_BACKUP_ENABLED = os.getenv("TICKET_BACKUP_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+TICKET_BACKUP_INTERVAL_MINUTES = int(os.getenv("TICKET_BACKUP_INTERVAL_MINUTES", "1440"))
+TICKET_BACKUP_ENDPOINT = os.getenv("TICKET_BACKUP_ENDPOINT", "s3.eu-central-1.wasabisys.com")
+TICKET_BACKUP_BUCKET = os.getenv("TICKET_BACKUP_BUCKET", "supportmailboxtickets")
+TICKET_BACKUP_DAILY_LIMIT = int(os.getenv("TICKET_BACKUP_DAILY_LIMIT", "0"))  # 0 = no limit
+
 # Admin Panel
 ADMIN_PANEL_PORT = int(os.getenv("ADMIN_PANEL_PORT", "5000"))
 ADMIN_PANEL_HOST = os.getenv("ADMIN_PANEL_HOST", "0.0.0.0")
@@ -86,6 +93,8 @@ def reload_config():
     global OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_AUTHORITY, OAUTH_REDIRECT_PATH
     global SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
     global RECHECK_HOUR, CONTINUOUS_OFFLOAD_INTERVAL, STORAGE_REPORT_INTERVAL
+    global TICKET_BACKUP_ENABLED, TICKET_BACKUP_INTERVAL_MINUTES
+    global TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET, TICKET_BACKUP_DAILY_LIMIT
     
     ZENDESK_SUBDOMAIN = os.getenv("ZENDESK_SUBDOMAIN", "")
     ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL", "")
@@ -123,5 +132,11 @@ def reload_config():
     RECHECK_HOUR = int(os.getenv("RECHECK_HOUR", "2"))
     CONTINUOUS_OFFLOAD_INTERVAL = int(os.getenv("CONTINUOUS_OFFLOAD_INTERVAL", "5"))
     STORAGE_REPORT_INTERVAL = int(os.getenv("STORAGE_REPORT_INTERVAL", "60"))
+
+    TICKET_BACKUP_ENABLED = os.getenv("TICKET_BACKUP_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    TICKET_BACKUP_INTERVAL_MINUTES = int(os.getenv("TICKET_BACKUP_INTERVAL_MINUTES", "1440"))
+    TICKET_BACKUP_ENDPOINT = os.getenv("TICKET_BACKUP_ENDPOINT", "s3.eu-central-1.wasabisys.com")
+    TICKET_BACKUP_BUCKET = os.getenv("TICKET_BACKUP_BUCKET", "supportmailboxtickets")
+    TICKET_BACKUP_DAILY_LIMIT = int(os.getenv("TICKET_BACKUP_DAILY_LIMIT", "0"))
 
 
