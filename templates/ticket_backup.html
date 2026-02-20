@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Ticket Backup — z2w{% endblock %}
-{% block page_title %}Closed-Ticket Backup{% endblock %}
+{% block page_title %}Closed Ticket Backup{% endblock %}
 {% block page_sub %}Archive closed Zendesk tickets to Wasabi S3{% endblock %}
 {% block topbar_actions %}
 <span id="jobStatus" class="text-sm text-muted"></span>
@@ -32,6 +32,18 @@
     <div class="stat-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Uploaded</div>
     <div class="stat-value" id="totalSize">{{ '%.1f'|format(total_bytes / 1048576) }} MB</div>
     <div class="stat-sub">{{ '{:,}'.format(total_files) }} files</div>
+  </div>
+
+</div>
+
+<!-- Progress bar -->
+<div class="progress-bar-wrap" style="margin-bottom:24px">
+  {% set percent = (success_count / closed_cache_count * 100) if closed_cache_count else 0 %}
+  <div style="background:var(--muted);border-radius:6px;height:18px;width:100%;overflow:hidden;box-shadow:0 1px 4px #0001">
+    <div style="background:var(--primary);height:100%;width:{{ '%.1f'|format(percent) }}%;transition:width 0.5s;border-radius:6px"></div>
+  </div>
+  <div style="font-size:13px;margin-top:4px;text-align:right;color:var(--muted-foreground)">
+    {{ '%.1f'|format(percent) }}% backed up
   </div>
 </div>
 
