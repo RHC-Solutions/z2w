@@ -46,3 +46,8 @@ Thumbs.db
 logs/
 *.log
 
+backups/
+*.backup-*
+# WAL sidecar files
+*.db-shm
+*.db-wal

@@ -4,8 +4,13 @@ Zendesk API client for fetching tickets and attachments
 import requests
 import base64
 import re
+import time
+import logging
 from typing import List, Dict, Optional
 from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
+
+# Get logger
+logger = logging.getLogger('zendesk_offloader')
 
 class ZendeskClient:
     """Client for interacting with Zendesk API"""
@@ -46,7 +51,7 @@ class ZendeskClient:
     
     def get_all_tickets(self, status: str = "all") -> List[Dict]:
         """
-        Get all tickets from Zendesk using cursor-based pagination
+        Get all tickets from Zendesk using the List Tickets endpoint with cursor-based pagination
         Returns list of ticket dictionaries
         """
         if not self.base_url:
@@ -54,41 +59,66 @@ class ZendeskClient:
             return []
         
         tickets = []
-        # Use incremental export API with cursor-based pagination
-        # This endpoint is designed for fetching large numbers of tickets
-        url = f"{self.base_url}/incremental/tickets/cursor.json"
-        params = {"start_time": "0"}  # Start from the beginning
+        # Use the List Tickets endpoint which supports cursor-based pagination
+        # and doesn't have the search response size limits
+        url = f"{self.base_url}/tickets.json"
         
-        print(f"Fetching tickets from Zendesk using cursor-based pagination: {url}")
+        params = {
+            "page[size]": 100  # Fetch 100 tickets per page (max allowed)
+        }
         
-        has_more = True
+        print(f"Fetching tickets from Zendesk using List Tickets API with cursor pagination")
+        
         page_count = 0
+        retry_count = 0
+        max_retries = 3
         
-        while has_more:
+        while url:
             try:
                 response = self.session.get(url, params=params)
+                
+                # Handle rate limiting with exponential backoff
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"Rate limit hit. Waiting {retry_after} seconds before retry {retry_count}/{max_retries}...")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        error_msg = f"Rate limit exceeded after {max_retries} retries"
+                        print(f"ERROR: {error_msg}")
+                        raise Exception(error_msg)
+                
                 response.raise_for_status()
                 data = response.json()
+                
+                # Reset retry count on success
+                retry_count = 0
                 
                 page_tickets = data.get("tickets", [])
                 tickets.extend(page_tickets)
                 page_count += 1
                 print(f"Fetched page {page_count}: {len(page_tickets)} tickets (total: {len(tickets)})")
                 
-                # Check for more pages using cursor pagination
-                has_more = not data.get("end_of_stream", False)
+                # Check for next page - Zendesk uses links.next for cursor pagination
+                links = data.get("links", {})
+                next_page = links.get("next")
                 
-                if has_more:
-                    # Get the after_cursor for next page
-                    after_cursor = data.get("after_cursor")
-                    if after_cursor:
-                        # Update URL and params for next request
-                        url = f"{self.base_url}/incremental/tickets/cursor.json"
-                        params = {"cursor": after_cursor}
+                if next_page:
+                    url = next_page
+                    params = None  # next_page URL already includes all params
+                    # Minimal delay between requests
+                    time.sleep(0.1)
+                else:
+                    # Also check meta for has_more flag
+                    meta = data.get("meta", {})
+                    if not meta.get("has_more", False):
+                        url = None
                     else:
-                        # No cursor provided, stop pagination
-                        has_more = False
-                        print("No after_cursor provided, ending pagination")
+                        # Shouldn't happen, but fallback to None to avoid infinite loop
+                        print("Warning: has_more is true but no next link found")
+                        url = None
                         
             except requests.exceptions.HTTPError as e:
                 error_msg = f"HTTP Error fetching tickets: {e.response.status_code} - {e.response.text}"
@@ -99,7 +129,7 @@ class ZendeskClient:
                 print(f"ERROR: {error_msg}")
                 raise Exception(error_msg)
         
-        # Filter by status if needed (incremental API returns all tickets)
+        # Filter by status if needed
         if status != "all":
             original_count = len(tickets)
             tickets = [t for t in tickets if t.get("status") == status]
@@ -161,22 +191,25 @@ class ZendeskClient:
             # Extract inline images from all comments
             for comment in data.get("comments", []):
                 comment_id = comment.get("id")
-                comment_body = comment.get("body", "")
+                # Prefer html_body for image scanning — body is plain text and may strip img tags
+                comment_body = comment.get("html_body") or comment.get("body", "") or ""
                 
                 if not comment_body:
                     continue
                 
-                # Find all inline images in HTML
-                # Pattern: <img src="https://subdomain.zendesk.com/attachments/..." />
-                # or <img src="/attachments/..." />
-                # Match img tags with attachments in src, including various formats
+                # First, collect all known attachments & inline_attachments for this comment
+                # keyed by token so we can match token-URL images to their attachment IDs
+                all_comment_atts = comment.get("attachments", []) + comment.get("inline_attachments", [])
+                token_to_att = {}
+                for att in all_comment_atts:
+                    att_url = att.get("content_url", "")
+                    token_m = re.search(r'/attachments/token/([^/?]+)', att_url)
+                    if token_m:
+                        token_to_att[token_m.group(1)] = att
+                
+                # Find all <img> tags pointing to Zendesk attachment URLs
                 img_pattern = r'<img[^>]+src=["\']([^"\']*attachments[^"\']*)["\'][^>]*>'
                 matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
-                
-                # If no matches with attachments pattern, try a more general pattern
-                if not matches:
-                    img_pattern = r'<img[^>]+src=["\']([^"\']*zendesk[^"\']*attachments[^"\']*)["\'][^>]*>'
-                    matches = list(re.finditer(img_pattern, comment_body, re.IGNORECASE))
                 
                 if matches:
                     print(f"Found {len(matches)} inline image(s) in comment {comment_id} for ticket {ticket_id}")
@@ -189,102 +222,90 @@ class ZendeskClient:
                     if img_url.startswith('/'):
                         img_url = f"https://{self.subdomain}.zendesk.com{img_url}"
                     
-                    # Extract attachment token/ID from URL
-                    # URL format: https://subdomain.zendesk.com/attachments/token/TOKEN/filename
-                    # or https://subdomain.zendesk.com/attachments/attachment_id
                     attachment_id = None
                     filename = "inline_image.png"
                     content_type = "image/png"
-                    attachment_content_url = None
+                    download_url = img_url
                     
-                    # Try to find the attachment in the comment's attachments list
-                    # Match by URL pattern or attachment ID
-                    for att in comment.get("attachments", []):
-                        att_url = att.get("content_url", "")
-                        att_id = att.get("id")
-                        
-                        if not att_url or not att_id:
-                            continue
-                        
-                        # Check if this attachment matches the inline image URL
-                        # Normalize URLs for comparison (remove query params, etc.)
-                        img_url_normalized = img_url.split('?')[0].rstrip('/')
-                        att_url_normalized = att_url.split('?')[0].rstrip('/')
-                        
-                        # Direct match
-                        if img_url_normalized == att_url_normalized:
-                            attachment_id = att_id
-                            filename = att.get("file_name", "inline_image.png")
-                            content_type = att.get("content_type", "image/png")
-                            attachment_content_url = att_url  # Use the API's content_url for downloading
-                            break
-                        
-                        # Substring match (one URL contains the other)
-                        if img_url_normalized in att_url_normalized or att_url_normalized in img_url_normalized:
-                            attachment_id = att_id
-                            filename = att.get("file_name", "inline_image.png")
-                            content_type = att.get("content_type", "image/png")
-                            attachment_content_url = att_url
-                            break
-                        
-                        # Try matching by extracting ID from URL
-                        # URL format: /attachments/12345 or /attachments/token/TOKEN/filename
-                        if '/attachments/' in img_url:
-                            # Try to extract numeric ID from URL
+                    # --- Try to match to a known attachment ---
+                    img_url_norm = img_url.split('?')[0].rstrip('/')
+                    
+                    # 1. Token match via pre-built index
+                    token_m = re.search(r'/attachments/token/([^/?]+)', img_url)
+                    if token_m and token_m.group(1) in token_to_att:
+                        att = token_to_att[token_m.group(1)]
+                        attachment_id = att.get("id")
+                        filename = att.get("file_name", filename)
+                        content_type = att.get("content_type", content_type)
+                        download_url = att.get("content_url", img_url)
+                    
+                    if not attachment_id:
+                        for att in all_comment_atts:
+                            att_url = att.get("content_url", "")
+                            att_id = att.get("id")
+                            if not att_url or not att_id:
+                                continue
+                            att_url_norm = att_url.split('?')[0].rstrip('/')
+                            
+                            # 2. Direct URL match
+                            if img_url_norm == att_url_norm or img_url_norm in att_url_norm or att_url_norm in img_url_norm:
+                                attachment_id = att_id
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
+                                break
+                            
+                            # 3. Numeric ID in URL
                             id_match = re.search(r'/attachments/(\d+)', img_url)
                             if id_match and str(att_id) == id_match.group(1):
                                 attachment_id = att_id
-                                filename = att.get("file_name", "inline_image.png")
-                                content_type = att.get("content_type", "image/png")
-                                attachment_content_url = att_url
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
                                 break
                             
-                            # Try matching by token in URL
-                            # URL format: /attachments/token/TOKEN/filename
-                            token_match = re.search(r'/attachments/token/([^/]+)', img_url)
-                            if token_match:
-                                token = token_match.group(1)
-                                # Check if attachment URL contains this token
-                                if token in att_url:
-                                    attachment_id = att_id
-                                    filename = att.get("file_name", "inline_image.png")
-                                    content_type = att.get("content_type", "image/png")
-                                    attachment_content_url = att_url
-                                    break
-                        
-                        # Try matching by filename in URL
-                        # Extract filename from img_url and compare with attachment filename
-                        filename_match = re.search(r'/([^/]+\.(jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
-                        if filename_match:
-                            url_filename = filename_match.group(1)
-                            att_filename = att.get("file_name", "")
-                            if url_filename.lower() == att_filename.lower():
+                            # 4. Filename match
+                            fn_match = re.search(r'/([^/?]+\.(?:jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
+                            if fn_match and fn_match.group(1).lower() == att.get("file_name", "").lower():
                                 attachment_id = att_id
-                                filename = att_filename
-                                content_type = att.get("content_type", "image/png")
-                                attachment_content_url = att_url
+                                filename = att.get("file_name", filename)
+                                content_type = att.get("content_type", content_type)
+                                download_url = att_url
                                 break
                     
-                    # If we found an attachment ID, add it to the list
+                    # Extract filename from URL if still default
+                    if filename == "inline_image.png":
+                        name_m = re.search(r'[?&]name=([^&]+)', img_url)
+                        if name_m:
+                            filename = name_m.group(1)
+                        else:
+                            fn_m = re.search(r'/([^/?]+\.(?:jpg|jpeg|png|gif|bmp|webp|svg))', img_url, re.IGNORECASE)
+                            if fn_m:
+                                filename = fn_m.group(1)
+                        # Guess content type from extension
+                        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+                        content_type = {
+                            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                            'png': 'image/png', 'gif': 'image/gif',
+                            'webp': 'image/webp', 'svg': 'image/svg+xml',
+                        }.get(ext, 'image/png')
+                    
+                    # Always include — even token-URL-only images (attachment_id may be None)
+                    inline_images.append({
+                        "attachment_id": attachment_id,  # None for token-URL-only images
+                        "comment_id": comment_id,
+                        "content_url": download_url,
+                        "file_name": filename,
+                        "content_type": content_type,
+                        "is_inline": True,
+                        "original_html": original_html,
+                        "comment_body": comment_body,
+                        "img_src": img_url,  # original src for HTML replacement
+                    })
                     if attachment_id:
-                        # Use the attachment's content_url from API for downloading, not the img src URL
-                        download_url = attachment_content_url if attachment_content_url else img_url
-                        inline_images.append({
-                            "attachment_id": attachment_id,
-                            "comment_id": comment_id,
-                            "content_url": download_url,  # Use API content_url for reliable downloading
-                            "file_name": filename,
-                            "content_type": content_type,
-                            "is_inline": True,
-                            "original_html": original_html,
-                            "comment_body": comment_body
-                        })
+                        print(f"  ✓ Matched inline image '{filename}' to attachment_id={attachment_id}")
                     else:
-                        # Log when we find an inline image but can't match it to an attachment
-                        print(f"  ✗ Warning: Found inline image in ticket {ticket_id}, comment {comment_id}, but could not match to attachment.")
-                        print(f"    Image URL: {img_url}")
-                        print(f"    Available attachments in comment: {[att.get('id') for att in comment.get('attachments', [])]}")
-                        print(f"    Attachment URLs: {[att.get('content_url', '')[:80] for att in comment.get('attachments', [])]}")
+                        print(f"  ⚠ Token-URL inline image '{filename}' — no attachment_id, will upload+link only")
         except requests.exceptions.RequestException as e:
             print(f"Error fetching inline images for ticket {ticket_id}: {e}")
         
@@ -308,7 +329,136 @@ class ZendeskClient:
         except requests.exceptions.RequestException as e:
             print(f"Error fetching comments for ticket {ticket_id}: {e}")
             return []
-    
+
+    def get_ticket_status(self, ticket_id: int) -> Optional[str]:
+        """Return the current status of a ticket (open/pending/solved/closed) or None on error."""
+        if not self.base_url:
+            return None
+        try:
+            resp = self.session.get(f"{self.base_url}/tickets/{ticket_id}.json")
+            if resp.ok:
+                return resp.json().get("ticket", {}).get("status")
+        except Exception as e:
+            print(f"Error fetching status for ticket {ticket_id}: {e}")
+        return None
+
+    def add_wasabi_link_comment(self, ticket_id: int, comment_id: int, wasabi_url: str, filename: str, img_src: str) -> bool:
+        """
+        For token-URL-only inline images (no attachment_id): add a private comment with
+        a Wasabi link so the file is reachable after the original Zendesk-hosted URL expires.
+        Cannot redact — just adds a reference link.
+        """
+        if not self.base_url:
+            return False
+        try:
+            body = (
+                f'<p>📎 Image/document secured: '
+                f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
+                f'<p><small>Original src: {img_src}</small></p>'
+            )
+            update_data = {"ticket": {"comment": {"html_body": body, "public": False}}}
+            resp = self.session.put(f"{self.base_url}/tickets/{ticket_id}.json", json=update_data)
+            resp.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error adding Wasabi link comment for ticket {ticket_id}: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"  Response: {e.response.text[:300]}")
+            return False
+
+    def redact_inline_image_agent_workspace(self, ticket_id: int, comment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
+        """
+        Redact a token-URL inline image from a comment using the Agent Workspace
+        Redaction API (PUT /api/v2/comment_redactions/{comment_id}).
+        This works even when there is no attachment_id — it redacts the <img> tag
+        directly from the HTML body, freeing storage in Zendesk.
+        After redaction, the image is replaced with ▇ characters.
+        """
+        if not self.base_url:
+            return False
+
+        try:
+            # Step 1: Get the original comment's full html_body
+            comments = self.get_ticket_comments(ticket_id)
+            original_comment = None
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    original_comment = comment
+                    break
+
+            if not original_comment:
+                logger.warning(f"[AgentWSRedact] Comment {comment_id} not found for ticket {ticket_id}")
+                return False
+
+            html_body = original_comment.get("html_body", "") or ""
+            if not html_body:
+                logger.warning(f"[AgentWSRedact] Empty html_body for comment {comment_id} in ticket {ticket_id}")
+                return False
+
+            # Step 2: Replace the original <img> tag with a redacted version.
+            # The Agent Workspace API expects the full html_body with the target
+            # element marked with the 'redact' attribute.
+            wasabi_link = (
+                f'<a href="{wasabi_url}" target="_blank" '
+                f'rel="noopener noreferrer">📎 {filename}</a>'
+            )
+            # Build the redacted img tag — add 'redact' attribute to tell ZD to remove it
+            redacted_img = original_html
+            if redacted_img.rstrip().endswith('/>'):
+                redacted_img = redacted_img.rstrip()[:-2].rstrip() + ' redact />'
+            elif redacted_img.rstrip().endswith('>'):
+                redacted_img = redacted_img.rstrip()[:-1].rstrip() + ' redact>'
+
+            modified_html = html_body.replace(original_html, redacted_img)
+
+            if modified_html == html_body:
+                logger.warning(
+                    f"[AgentWSRedact] Could not find original <img> tag in html_body "
+                    f"for comment {comment_id} in ticket {ticket_id}"
+                )
+                return False
+
+            # Step 3: Call the Agent Workspace redaction endpoint
+            url = f"{self.base_url}/comment_redactions/{comment_id}.json"
+            payload = {
+                "ticket_id": ticket_id,
+                "html_body": modified_html,
+            }
+            resp = self.session.put(url, json=payload)
+
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get('Retry-After', 30))
+                logger.warning(f"[AgentWSRedact] Rate-limited, waiting {retry_after}s")
+                time.sleep(retry_after)
+                resp = self.session.put(url, json=payload)
+
+            if resp.ok:
+                logger.info(
+                    f"[AgentWSRedact] ✓ Redacted inline image '{filename}' from "
+                    f"comment {comment_id} in ticket {ticket_id}"
+                )
+                # Step 4: Add a private comment with the Wasabi link so the file is still accessible
+                try:
+                    link_body = (
+                        f'<p>📎 Inline image offloaded to secure storage: '
+                        f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
+                    )
+                    update_data = {"ticket": {"comment": {"html_body": link_body, "public": False}}}
+                    self.session.put(f"{self.base_url}/tickets/{ticket_id}.json", json=update_data)
+                except Exception as link_err:
+                    logger.warning(f"[AgentWSRedact] Could not add Wasabi link comment: {link_err}")
+                return True
+            else:
+                logger.warning(
+                    f"[AgentWSRedact] ✗ Failed ({resp.status_code}) to redact inline image "
+                    f"in comment {comment_id} for ticket {ticket_id}: {resp.text[:300]}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"[AgentWSRedact] Exception for ticket {ticket_id} comment {comment_id}: {e}", exc_info=True)
+            return False
+
     def replace_inline_image_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
         """
         Replace an inline image in a comment with a Wasabi link
@@ -434,6 +584,12 @@ class ZendeskClient:
         url = f"{self.base_url}/tickets/{ticket_id}.json"
         
         try:
+            # Check ticket status — closed tickets cannot be updated via Zendesk API
+            ticket_resp = self.session.get(url)
+            ticket_status = None
+            if ticket_resp.ok:
+                ticket_status = ticket_resp.json().get("ticket", {}).get("status")
+
             # Get the original comment to check if it's public or private
             comments = self.get_ticket_comments(ticket_id)
             original_comment = None
@@ -445,26 +601,31 @@ class ZendeskClient:
             is_public = True
             if original_comment:
                 is_public = original_comment.get("public", True)
-            
-            # Create a new comment with the Wasabi link
-            # Format: [Attachment Secured: filename (link)]
-            wasabi_link_text = f"[Attachment Secured: {filename}]({wasabi_url})"
-            
-            # Add a new comment with the Wasabi link
-            update_data = {
-                "ticket": {
-                    "comment": {
-                        "body": wasabi_link_text,
-                        "public": is_public
+
+            if ticket_status == "closed":
+                # Closed tickets cannot receive new comments or redactions — skip silently,
+                # the attachment has already been uploaded to Wasabi.
+                logger.info(f"Ticket {ticket_id} is closed — skipping Zendesk comment and redact (Zendesk blocks updates on closed tickets)")
+                return True  # treat as success — file is safely in Wasabi
+            else:
+                # Create a new comment with the Wasabi link
+                # Format: [Attachment Secured: filename (link)]
+                wasabi_link_text = f"[Attachment Secured: {filename}]({wasabi_url})"
+                
+                update_data = {
+                    "ticket": {
+                        "comment": {
+                            "body": wasabi_link_text,
+                            "public": is_public
+                        }
                     }
                 }
-            }
-            
-            response = self.session.put(url, json=update_data)
-            response.raise_for_status()
-            
-            # Now redact (delete) the attachment from the original comment
-            return self.delete_attachment(ticket_id, comment_id, attachment_id)
+                
+                response = self.session.put(url, json=update_data)
+                response.raise_for_status()
+                
+                # Now redact (delete) the attachment from the original comment
+                return self.delete_attachment(ticket_id, comment_id, attachment_id)
             
         except requests.exceptions.RequestException as e:
             print(f"Error replacing attachment {attachment_id} in comment {comment_id} for ticket {ticket_id}: {e}")
@@ -509,31 +670,76 @@ class ZendeskClient:
             print(f"ERROR: Request exception when redacting attachment {attachment_id}: {e}")
             return False
     
-    def download_attachment(self, attachment_url: str) -> Optional[bytes]:
+    def download_attachment(self, attachment_url: str, max_retries: int = 3) -> Optional[bytes]:
         """
-        Download attachment content
-        Handles both regular attachment URLs and inline image URLs
+        Download attachment content with retry logic.
+        Handles both regular attachment URLs and inline image URLs.
+        Retries on transient errors (429, 5xx, timeouts).
         """
         try:
             # Ensure URL is absolute
             if attachment_url.startswith('/'):
                 attachment_url = f"https://{self.subdomain}.zendesk.com{attachment_url}"
             
-            # Use the session which has authentication
-            response = self.session.get(attachment_url, timeout=30)
-            response.raise_for_status()
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    # Use the session which has authentication
+                    response = self.session.get(attachment_url, timeout=30)
+                    
+                    # Handle rate limiting
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get('Retry-After', 30))
+                        logger.warning(f"Download rate-limited (429), waiting {retry_after}s (attempt {attempt}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    
+                    # Retry on server errors
+                    if response.status_code >= 500:
+                        logger.warning(f"Download server error {response.status_code} for {attachment_url} (attempt {attempt}/{max_retries})")
+                        time.sleep(2 * attempt)
+                        continue
+                    
+                    # 403/404 — try alternate URL format once before giving up
+                    if response.status_code in (403, 404) and attempt == 1:
+                        logger.info(f"Download got {response.status_code}, retrying with alternate URL (attempt {attempt}/{max_retries})")
+                        # Strip query params and try bare URL
+                        bare_url = attachment_url.split('?')[0]
+                        if bare_url != attachment_url:
+                            alt_resp = self.session.get(bare_url, timeout=30)
+                            if alt_resp.ok and alt_resp.content:
+                                logger.info(f"Download succeeded with bare URL (no query params)")
+                                return alt_resp.content
+                        time.sleep(1)
+                        continue
+                    
+                    response.raise_for_status()
+                    
+                    # Check if we got actual content
+                    if response.content:
+                        return response.content
+                    else:
+                        logger.warning(f"Empty content downloaded from {attachment_url}")
+                        return None
+                        
+                except requests.exceptions.Timeout:
+                    last_error = f"Timeout downloading {attachment_url} (attempt {attempt}/{max_retries})"
+                    logger.warning(last_error)
+                    time.sleep(2 * attempt)
+                except requests.exceptions.ConnectionError as e:
+                    last_error = f"Connection error downloading {attachment_url}: {e} (attempt {attempt}/{max_retries})"
+                    logger.warning(last_error)
+                    time.sleep(2 * attempt)
             
-            # Check if we got actual content
-            if response.content:
-                return response.content
-            else:
-                print(f"Warning: Empty content downloaded from {attachment_url}")
-                return None
+            # All retries exhausted
+            logger.error(f"Download failed after {max_retries} attempts: {attachment_url}" + (f" — last error: {last_error}" if last_error else ""))
+            return None
+            
         except requests.exceptions.HTTPError as e:
-            print(f"HTTP Error downloading attachment from {attachment_url}: {e.response.status_code} - {e.response.text[:200]}")
+            logger.error(f"HTTP Error downloading attachment from {attachment_url}: {e.response.status_code} - {e.response.text[:200]}")
             return None
         except requests.exceptions.RequestException as e:
-            print(f"Error downloading attachment from {attachment_url}: {e}")
+            logger.error(f"Error downloading attachment from {attachment_url}: {e}")
             return None
     
     def mark_ticket_as_read(self, ticket_id: int) -> bool:
@@ -572,17 +778,134 @@ class ZendeskClient:
             print(f"Error marking ticket {ticket_id} as read: {e}")
             return False
     
+    def get_recently_updated_tickets(self, since_minutes: int = 10) -> List[Dict]:
+        """
+        Fetch only tickets updated in the last `since_minutes` minutes using the
+        Zendesk incremental tickets API (/incremental/tickets/cursor).
+        Much faster than a full scan — ideal for continuous/interval offload.
+        Returns list of ticket dicts (may include deleted/spam; caller should filter).
+        """
+        if not self.base_url:
+            return []
+
+        from datetime import datetime, timezone, timedelta
+        import math
+
+        since_dt = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+        since_ts = math.floor(since_dt.timestamp())
+
+        tickets = []
+        url = f"{self.base_url}/incremental/tickets.json"
+        params = {"start_time": since_ts}
+
+        logger.info(f"Fetching tickets updated since {since_dt.strftime('%Y-%m-%d %H:%M:%S')} UTC (last {since_minutes} min)")
+
+        while url:
+            try:
+                response = self.session.get(url, params=params)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 30))
+                    logger.warning(f"Rate limited — waiting {retry_after}s")
+                    time.sleep(retry_after)
+                    continue
+                if response.status_code == 422:
+                    # start_time too recent (Zendesk requires at least 1 min ago) — return empty
+                    logger.info("Incremental API: start_time too recent, no tickets yet")
+                    return []
+                response.raise_for_status()
+                data = response.json()
+
+                page_tickets = data.get("tickets", [])
+                # Filter out deleted/spam tickets
+                active = [t for t in page_tickets if t.get("status") not in ("deleted",)]
+                tickets.extend(active)
+
+                # Incremental API uses end_of_stream flag
+                if data.get("end_of_stream", True):
+                    break
+                next_url = data.get("next_page")
+                if not next_url:
+                    break
+                url = next_url
+                params = None
+
+            except Exception as e:
+                logger.error(f"Error fetching recent tickets: {e}")
+                break
+
+        logger.info(f"Incremental fetch returned {len(tickets)} active tickets updated in last {since_minutes} min")
+        return tickets
+
     def get_new_tickets(self, processed_ticket_ids: set) -> List[Dict]:
         """
         Get only new tickets that haven't been processed
+        Fetches ALL tickets to find new ones (uses cursor pagination, no 10K limit)
         """
         print(f"Getting new tickets. Already processed: {len(processed_ticket_ids)} tickets")
-        all_tickets = self.get_all_tickets()
+        
+        if not self.base_url:
+            print("ERROR: Zendesk base_url is not set.")
+            return []
+        
+        max_processed_id = max(processed_ticket_ids) if processed_ticket_ids else 0
+        print(f"Max processed ticket ID: {max_processed_id}")
+        
+        # Fetch ALL tickets using cursor pagination
+        # This is necessary because new tickets could be anywhere in the list
+        all_tickets = []
+        url = f"{self.base_url}/tickets.json"
+        params = {"page[size]": 100}
+        
+        page_count = 0
+        
+        print(f"Fetching all tickets to find new ones...")
+        
+        while url:
+            try:
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                page_tickets = data.get("tickets", [])
+                all_tickets.extend(page_tickets)
+                page_count += 1
+                
+                # Show progress every 20 pages
+                if page_count % 20 == 0:
+                    print(f"Fetched {page_count} pages, {len(all_tickets)} tickets so far...")
+                
+                # Check for next page
+                links = data.get("links", {})
+                next_page = links.get("next")
+                
+                if next_page:
+                    url = next_page
+                    params = None
+                    time.sleep(0.1)
+                else:
+                    break
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching tickets: {e}")
+                logger.error(f"Error fetching tickets: {e}")
+                break
+        
+        print(f"Fetched total of {len(all_tickets)} tickets in {page_count} pages")
+        
+        # Filter to only new tickets
         new_tickets = [
             ticket for ticket in all_tickets 
             if ticket.get("id") not in processed_ticket_ids
         ]
-        print(f"Found {len(new_tickets)} new tickets out of {len(all_tickets)} total")
+        
+        # Sort by ID descending (newest first)
+        new_tickets.sort(key=lambda x: x.get("id", 0), reverse=True)
+        
+        print(f"Found {len(new_tickets)} new tickets")
+        if new_tickets:
+            ids = [t.get("id") for t in new_tickets[:5]]
+            print(f"New ticket IDs: {ids}")
+        
         return new_tickets
 
 

@@ -1,69 +1,80 @@
 {% extends "base.html" %}
+{% block title %}Processed Tickets — z2w{% endblock %}
+{% block page_title %}Processed Tickets{% endblock %}
+{% block page_sub %}Tickets that have been offloaded to Wasabi{% endblock %}
 
 {% block content %}
-<h1 class="h2">Processed Tickets</h1>
+<form method="GET" action="{{ url_for('tickets') }}" class="flex flex-wrap gap-2 mb-4">
+  <input type="text" class="form-control" name="q" value="{{ q or '' }}" placeholder="Search ticket ID, status, error, file key" style="max-width:320px">
+  <select name="status" class="form-select" style="max-width:160px">
+    <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+    <option value="processed" {% if status_filter == 'processed' %}selected{% endif %}>Processed</option>
+    <option value="error"     {% if status_filter == 'error'     %}selected{% endif %}>Error</option>
+  </select>
+  <input type="hidden" name="sort"  value="{{ sort  or 'processed_at' }}">
+  <input type="hidden" name="order" value="{{ order or 'desc' }}">
+  <button type="submit" class="btn btn-primary btn-sm">Search</button>
+  <a href="{{ url_for('tickets') }}" class="btn btn-outline btn-sm">Clear</a>
+</form>
 
-<div class="mt-4">
-    <table class="table table-striped">
-        <thead>
-            <tr>
-                <th>Ticket ID</th>
-                <th>Processed At</th>
-                <th>Attachments Count</th>
-                <th>Status</th>
-                <th>Wasabi Files</th>
-                <th>Error</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for ticket in tickets.items %}
-            <tr>
-                <td>{{ ticket.ticket_id }}</td>
-                <td>{{ ticket.processed_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                <td>{{ ticket.attachments_count }}</td>
-                <td>
-                    <span class="badge bg-{{ 'success' if ticket.status == 'processed' else 'danger' }}">
-                        {{ ticket.status }}
-                    </span>
-                </td>
-                <td>
-                    {% if ticket.wasabi_urls %}
-                        {% for file_info in ticket.wasabi_urls %}
-                            <a href="{{ file_info.url }}" target="_blank" class="btn btn-sm btn-outline-primary mb-1" style="display: inline-block; margin-right: 5px;">
-                                {{ file_info.filename }}
-                            </a>
-                        {% endfor %}
-                    {% else %}
-                        <span class="text-muted">-</span>
-                    {% endif %}
-                </td>
-                <td>{{ ticket.error_message or '-' }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    
-    <nav>
-        <ul class="pagination">
-            {% if tickets.has_prev %}
-            <li class="page-item"><a class="page-link" href="?page={{ tickets.prev_num }}">Previous</a></li>
-            {% endif %}
-            {% for page_num in tickets.iter_pages() %}
-                {% if page_num %}
-                    <li class="page-item {{ 'active' if page_num == tickets.page else '' }}">
-                        <a class="page-link" href="?page={{ page_num }}">{{ page_num }}</a>
-                    </li>
-                {% else %}
-                    <li class="page-item disabled"><span class="page-link">…</span></li>
-                {% endif %}
-            {% endfor %}
-            {% if tickets.has_next %}
-            <li class="page-item"><a class="page-link" href="?page={{ tickets.next_num }}">Next</a></li>
-            {% endif %}
-        </ul>
-    </nav>
+<div class="text-muted text-sm mb-3">
+  Showing {{ tickets.items | length }} of {{ tickets.total }} ticket(s){% if q %} matching <strong>{{ q }}</strong>{% endif %}{% if status_filter %} · status: <strong>{{ status_filter }}</strong>{% endif %}
 </div>
 
+{% macro sort_link(col, label) %}
+  {% set cur_sort  = sort  or 'processed_at' %}
+  {% set cur_order = order or 'desc' %}
+  {% if cur_sort == col %}
+    {% set next_order = 'asc' if cur_order == 'desc' else 'desc' %}
+    {% set icon = '↑' if cur_order == 'asc' else '↓' %}
+  {% else %}
+    {% set next_order = 'desc' %}{% set icon = '↕' %}
+  {% endif %}
+  <a href="?sort={{ col }}&order={{ next_order }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ label }} <span class="text-muted">{{ icon }}</span></a>
+{% endmacro %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ sort_link('ticket_id','Ticket ID') }}</th>
+        <th>{{ sort_link('processed_at','Processed At') }}</th>
+        <th>{{ sort_link('attachments_count','Attachments') }}</th>
+        <th>{{ sort_link('status','Status') }}</th>
+        <th>Wasabi Files</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tickets.items %}
+      <tr>
+        <td class="font-mono font-semibold">#{{ t.ticket_id }}</td>
+        <td class="font-mono text-muted">{{ t.processed_at.strftime('%d-%m-%Y %H:%M') }}</td>
+        <td><span class="badge badge-secondary">{{ t.attachments_count }}</span></td>
+        <td><span class="badge badge-{{ 'success' if t.status == 'processed' else 'danger' }}">{{ t.status }}</span></td>
+        <td>
+          {% if t.wasabi_urls %}
+            {% for f in t.wasabi_urls %}
+              <a href="{{ f.url }}" target="_blank" class="btn btn-outline btn-xs mb-1">{{ f.filename }}</a>
+            {% endfor %}
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        <td class="text-destructive text-sm">{{ t.error_message or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted text-center" style="padding:24px">No tickets found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set qs = ('&q=' + q|urlencode if q else '') + ('&status=' + status_filter if status_filter else '') + '&sort=' + (sort or 'processed_at') + '&order=' + (order or 'desc') %}
+<nav class="pagination">
+  {% if tickets.has_prev %}<a class="page-link" href="?page={{ tickets.prev_num }}{{ qs }}">← Prev</a>{% endif %}
+  {% for pn in tickets.iter_pages() %}
+    {% if pn %}<a class="page-link {{ 'active' if pn == tickets.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
+    {% else %}<span class="page-link disabled">…</span>{% endif %}
+  {% endfor %}
+  {% if tickets.has_next %}<a class="page-link" href="?page={{ tickets.next_num }}{{ qs }}">Next →</a>{% endif %}
+</nav>
 {% endblock %}
-
-

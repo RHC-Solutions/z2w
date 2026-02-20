@@ -1,125 +1,228 @@
 {% extends "base.html" %}
+{% block title %}Dashboard — z2w{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_sub %}Zendesk to Wasabi offload overview{% endblock %}
+{% block topbar_actions %}{% endblock %}
 
 {% block content %}
-<h1 class="h2">Dashboard</h1>
-
-<div class="row mt-4">
-    <div class="col-md-3">
-        <div class="card text-white bg-primary">
-            <div class="card-body">
-                <h5 class="card-title">Total Tickets Processed</h5>
-                <h2>{{ total_processed }}</h2>
-            </div>
-        </div>
+<div class="stat-grid">
+  <div class="stat-card primary">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+      Tickets Processed
     </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-success">
-            <div class="card-body">
-                <h5 class="card-title">Total Attachments</h5>
-                <h2>{{ total_attachments }}</h2>
-            </div>
-        </div>
+    <div class="stat-value">{{ total_processed }}</div>
+  </div>
+  <div class="stat-card success">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      Attachments Uploaded
     </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-info">
-            <div class="card-body">
-                <h5 class="card-title">Scheduler Status</h5>
-                <h6 id="scheduler-status">Loading...</h6>
-                <small id="next-run"></small>
-            </div>
-        </div>
+    <div class="stat-value">{{ total_attachments }}</div>
+  </div>
+  <div class="stat-card" id="offloadSchedulerCard">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Attachment Offload Scheduler
     </div>
-    <div class="col-md-3">
-        <div class="card">
-            <div class="card-body">
-                <h5 class="card-title">Actions</h5>
-                <button class="btn btn-primary btn-sm" onclick="runNow()">Run Now</button>
-                <button class="btn btn-success btn-sm" onclick="startScheduler()">Start Scheduler</button>
-                <button class="btn btn-danger btn-sm" onclick="stopScheduler()">Stop Scheduler</button>
-            </div>
-        </div>
+    <div class="stat-value" style="font-size:16px" id="offload-scheduler-status">Loading…</div>
+    <div class="stat-sub" id="offload-next-run"></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-success btn-xs" onclick="startScheduler()">Start</button>
+      <button class="btn btn-destructive btn-xs" onclick="stopScheduler()">Stop</button>
     </div>
+  </div>
+  <div class="stat-card" id="backupSchedulerCard">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Tickets Backup Scheduler
+    </div>
+    <div class="stat-value" style="font-size:16px" id="backup-scheduler-status">Loading…</div>
+    <div class="stat-sub" id="backup-next-run"></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-success btn-xs" onclick="startBackupScheduler()">Start</button>
+      <button class="btn btn-destructive btn-xs" onclick="stopBackupScheduler()">Stop</button>
+    </div>
+  </div>
+  <div class="stat-card info" id="ticketsBackupCard">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Tickets Backup
+    </div>
+    <div class="stat-value" id="tickets-backup-count">Loading…</div>
+    <div class="stat-sub" id="tickets-backup-last-run">Last run: Loading…</div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-primary btn-xs" onclick="runBackupNow()">Run Backup Now</button>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Ticket Cache
+    </div>
+    {% if cache_total %}
+    <div class="stat-value" style="font-size:18px">{{ "{:,}".format(cache_total) }}</div>
+    <div class="stat-sub">Last sync: {% if cache_last_sync %}{{ cache_last_sync.strftime('%d-%m-%Y %H:%M') }}{% else %}never{% endif %}</div>
+    {% else %}
+    <div class="stat-value text-muted" style="font-size:14px">Not synced</div>
+    <div class="stat-sub">Sync runs with daily offload</div>
+    {% endif %}
+    <div style="margin-top:8px">
+      <button class="btn btn-outline btn-xs" onclick="syncCache()" id="syncCacheBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        Sync Now
+      </button>
+    </div>
+  </div>
 </div>
 
-<div class="row mt-4">
-    <div class="col-12">
-        <h3>Recent Offload Logs</h3>
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Tickets Processed</th>
-                    <th>Attachments Uploaded</th>
-                    <th>Errors</th>
-                    <th>Status</th>
-                    <th>Report Sent</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for log in recent_logs %}
-                <tr>
-                    <td>{{ log.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td>{{ log.tickets_processed }}</td>
-                    <td>{{ log.attachments_uploaded }}</td>
-                    <td>{{ log.errors_count }}</td>
-                    <td>
-                        <span class="badge bg-{{ 'success' if log.status == 'completed' else 'warning' }}">
-                            {{ log.status }}
-                        </span>
-                    </td>
-                    <td>
-                        <i class="bi bi-{{ 'check-circle text-success' if log.report_sent else 'x-circle text-danger' }}"></i>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+<div class="mt-6">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div class="section-heading" style="margin-bottom:0;border:none">Recent Offload Runs</div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <input type="text" id="logSearch" class="form-control" placeholder="Search…" style="max-width:180px;height:30px;font-size:12px" oninput="filterLogs()">
+      <select id="logStatusFilter" class="form-select" style="height:30px;font-size:12px;width:auto;min-width:100px" onchange="filterLogs()">
+        <option value="">All statuses</option>
+        <option value="completed">Completed</option>
+        <option value="running">Running</option>
+        <option value="error">Error</option>
+      </select>
     </div>
+  </div>
+  <div class="table-wrap">
+    <table id="logsTable">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="date" onclick="sortLogs('date')">Date <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="tickets" onclick="sortLogs('tickets')">Tickets <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="attachments" onclick="sortLogs('attachments')">Attachments <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="inline" onclick="sortLogs('inline')">Inline <span class="sort-icon">↕</span></th>
+          <th class="sortable" data-col="errors" onclick="sortLogs('errors')">Errors <span class="sort-icon">↕</span></th>
+          <th>Status</th>
+          <th>Report</th>
+        </tr>
+      </thead>
+      <tbody id="logsTbody">
+        {% for log in recent_logs %}
+        {% set d = (log.details | fromjson) if log.details else {} %}
+        <tr data-date="{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}"
+            data-tickets="{{ log.tickets_processed }}"
+            data-attachments="{{ log.attachments_uploaded }}"
+            data-inline="{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}"
+            data-errors="{{ log.errors_count or 0 }}"
+            data-status="{{ log.status }}">
+          <td class="font-mono">{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}</td>
+          <td>{{ log.tickets_processed }}</td>
+          <td>{{ log.attachments_uploaded }}</td>
+          <td>{% if d.get('inlines_uploaded', log.inlines_uploaded or 0) > 0 %}<span class="badge badge-primary">{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}</span>{% else %}0{% endif %}</td>
+          <td>{% if log.errors_count %}<span class="text-destructive font-semibold">{{ log.errors_count }}</span>{% else %}0{% endif %}</td>
+          <td>
+            <span class="badge badge-{{ 'success' if log.status == 'completed' else 'warning' }}">{{ log.status }}</span>
+          </td>
+          <td>
+            {% if log.report_sent %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--success)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            {% else %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--muted-foreground)"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-muted text-center" style="padding:24px">No runs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Recheck modal -->
+<div class="modal-overlay" id="recheckModal">
+  <div class="modal-box">
+    <div class="modal-title">🔁 Recheck All Tickets</div>
+    <div class="modal-body">This will scan <strong>all Zendesk tickets</strong> and re-process any that still have attachments not yet offloaded.<br><br>Runs in the background — check the <a href="{{ url_for('recheck_report') }}" style="color:var(--primary)">Recheck Report</a> for progress.</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('recheckModal')">Cancel</button>
+      <button class="btn btn-warning btn-sm" id="recheckConfirmBtn">Start Recheck</button>
+    </div>
+  </div>
+</div>
+
+<!-- Backup modal -->
+<div class="modal-overlay" id="backupModal">
+  <div class="modal-box">
+    <div class="modal-title">💾 Create Backup</div>
+    <div class="modal-body">A full backup will be created and sent to <strong>Telegram</strong> and <strong>Slack</strong>.<br><br>This may take up to a minute.</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('backupModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="backupConfirmBtn">Create Backup</button>
+    </div>
+  </div>
 </div>
 
 <script>
 function updateSchedulerStatus() {
-    fetch('/api/scheduler/status')
-        .then(r => r.json())
-        .then(data => {
-            document.getElementById('scheduler-status').textContent = data.running ? 'Running' : 'Stopped';
-            if (data.next_run) {
-                const nextRun = new Date(data.next_run);
-                document.getElementById('next-run').textContent = 'Next: ' + nextRun.toLocaleString();
-            }
-        });
+  fetch('/api/scheduler/status').then(r=>r.json()).then(data=>{
+    const el = document.getElementById('scheduler-status');
+    el.textContent = data.running ? 'Running' : 'Stopped';
+    el.style.color = data.running ? 'var(--success)' : 'var(--muted-foreground)';
+    if (data.next_run) document.getElementById('next-run').textContent = 'Next: ' + fmtDT(data.next_run);
+  });
 }
-
 function runNow() {
-    fetch('/api/run_now', {method: 'POST'})
-        .then(r => r.json())
-        .then(data => {
-            alert(data.message);
-            if (data.success) location.reload();
-        });
+  fetch('/api/run_now',{method:'POST'}).then(r=>r.json()).then(d=>{
+    showToast(d.message, d.success?'success':'danger');
+    if(d.success) setTimeout(()=>location.reload(),1500);
+  });
 }
-
-function startScheduler() {
-    fetch('/api/scheduler/start', {method: 'POST'})
-        .then(r => r.json())
-        .then(data => {
-            alert(data.message);
-            updateSchedulerStatus();
-        });
+function startScheduler() { fetch('/api/scheduler/start',{method:'POST'}).then(r=>r.json()).then(d=>{ showToast(d.message,d.success?'success':'danger'); updateSchedulerStatus(); }); }
+function stopScheduler()  { fetch('/api/scheduler/stop', {method:'POST'}).then(r=>r.json()).then(d=>{ showToast(d.message,d.success?'success':'danger'); updateSchedulerStatus(); }); }
+function syncCache() {
+  const btn=document.getElementById('syncCacheBtn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Syncing…';
+  fetch('/api/sync_ticket_cache',{method:'POST'}).then(r=>r.json()).then(d=>{
+    showToast(d.message||'Sync started', d.success?'info':'danger');
+    setTimeout(()=>{ btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Sync Now'; },5000);
+  }).catch(()=>{ btn.disabled=false; btn.innerHTML='Sync Now'; });
 }
-
-function stopScheduler() {
-    fetch('/api/scheduler/stop', {method: 'POST'})
-        .then(r => r.json())
-        .then(data => {
-            alert(data.message);
-            updateSchedulerStatus();
-        });
-}
-
+document.getElementById('recheckConfirmBtn').addEventListener('click',function(){
+  closeModal('recheckModal'); showToast('Starting recheck…','info');
+  fetch('/api/recheck_all',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.success) setTimeout(()=>window.location.href='/recheck_report',800);
+    else showToast(d.message,'danger');
+  });
+});
+document.getElementById('backupConfirmBtn').addEventListener('click',function(){
+  closeModal('backupModal'); showToast('Backup started…','info');
+  fetch('/api/backup_now',{method:'POST'}).then(r=>r.json()).then(d=>showToast(d.message,d.success?'success':'danger'));
+});
 updateSchedulerStatus();
-setInterval(updateSchedulerStatus, 30000);
+setInterval(updateSchedulerStatus,30000);
+
+/* ── Sort & Filter for Offload Runs table ── */
+var _sortCol='date', _sortDir='desc';
+function sortLogs(col){
+  if(_sortCol===col) _sortDir=_sortDir==='asc'?'desc':'asc';
+  else { _sortCol=col; _sortDir='desc'; }
+  document.querySelectorAll('#logsTable th.sortable .sort-icon').forEach(function(el){el.textContent='↕';});
+  var th=document.querySelector('#logsTable th[data-col="'+col+'"] .sort-icon');
+  if(th) th.textContent=_sortDir==='asc'?'↑':'↓';
+  var tbody=document.getElementById('logsTbody');
+  var rows=Array.from(tbody.querySelectorAll('tr[data-date]'));
+  rows.sort(function(a,b){
+    var av=a.dataset[col]||'', bv=b.dataset[col]||'';
+    if(col==='date') return _sortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);
+    var an=parseFloat(av)||0, bn=parseFloat(bv)||0;
+    return _sortDir==='asc'?an-bn:bn-an;
+  });
+  rows.forEach(function(r){tbody.appendChild(r);});
+}
+function filterLogs(){
+  var q=(document.getElementById('logSearch').value||'').toLowerCase();
+  var st=(document.getElementById('logStatusFilter').value||'').toLowerCase();
+  document.querySelectorAll('#logsTbody tr[data-date]').forEach(function(tr){
+    var txt=tr.textContent.toLowerCase();
+    var match=(!q||txt.indexOf(q)!==-1)&&(!st||tr.dataset.status===st);
+    tr.style.display=match?'':'none';
+  });
+}
 </script>
 {% endblock %}
-
-

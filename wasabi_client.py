@@ -146,6 +146,27 @@ class WasabiClient:
             print(f"Error generating public URL for {s3_key}: {e}")
             return None
     
+    def get_storage_stats(self) -> dict:
+        """
+        Return bucket storage statistics (total objects, total size).
+        Uses list_objects_v2 with pagination — may take a few seconds for large buckets.
+        Returns dict with keys: object_count, total_bytes, total_mb, total_gb, error
+        """
+        stats = {"object_count": 0, "total_bytes": 0, "total_mb": 0.0, "total_gb": 0.0, "error": None}
+        try:
+            client = self._get_s3_client()
+            paginator = client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=self.bucket_name)
+            for page in pages:
+                for obj in page.get('Contents', []):
+                    stats["object_count"] += 1
+                    stats["total_bytes"] += obj.get('Size', 0)
+            stats["total_mb"] = stats["total_bytes"] / (1024 * 1024)
+            stats["total_gb"] = stats["total_bytes"] / (1024 * 1024 * 1024)
+        except Exception as e:
+            stats["error"] = str(e)
+        return stats
+
     def test_connection(self) -> tuple[bool, str]:
         """Test connection to Wasabi B2
         Returns (success: bool, message: str)

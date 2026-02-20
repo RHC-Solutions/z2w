@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Ticket Backup — z2w{% endblock %}
+{% block page_title %}Closed-Ticket Backup{% endblock %}
+{% block page_sub %}Archive closed Zendesk tickets to Wasabi S3{% endblock %}
+{% block topbar_actions %}
+<span id="jobStatus" class="text-sm text-muted"></span>
+<button class="btn btn-primary btn-sm" onclick="runBackupNow()" id="runBtn">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  Run Backup Now
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- Stat cards -->
+<div class="stat-grid mb-4">
+  <div class="stat-card success">
+    <div class="stat-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Backed Up</div>
+    <div class="stat-value">{{ '{:,}'.format(success_count) }}</div>
+    <div class="stat-sub">of {{ '{:,}'.format(closed_cache_count) }} closed tickets</div>
+  </div>
+  <div class="stat-card warning">
+    <div class="stat-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Pending</div>
+    <div class="stat-value">{{ '{:,}'.format(closed_cache_count - success_count - failed_count - skipped_count) }}</div>
+    <div class="stat-sub">awaiting backup</div>
+  </div>
+  <div class="stat-card danger">
+    <div class="stat-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Failed</div>
+    <div class="stat-value">{{ '{:,}'.format(failed_count) }}</div>
+    <div class="stat-sub">{{ '{:,}'.format(skipped_count) }} skipped</div>
+  </div>
+  <div class="stat-card primary">
+    <div class="stat-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Uploaded</div>
+    <div class="stat-value" id="totalSize">{{ '%.1f'|format(total_bytes / 1048576) }} MB</div>
+    <div class="stat-sub">{{ '{:,}'.format(total_files) }} files</div>
+  </div>
+</div>
+
+{% if last_run %}
+<div class="alert alert-info mb-4" style="font-size:13px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+  <span>Last run: <b>{{ last_run.run_date.strftime('%d-%m-%Y %H:%M') }} UTC</b> &mdash;
+  scanned {{ last_run.tickets_scanned }}, backed up {{ last_run.tickets_backed_up }},
+  {{ last_run.files_uploaded }} files ({{ '%.1f'|format(last_run.bytes_uploaded / 1048576) }} MB),
+  {{ last_run.errors_count }} error{{ 's' if last_run.errors_count != 1 else '' }}
+  &bull; Status: <span class="badge {% if last_run.status == 'completed' %}badge-success{% else %}badge-warning{% endif %}">{{ last_run.status }}</span>
+  </span>
+</div>
+{% endif %}
+
+<!-- Search + Filter bar -->
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px 16px">
+    <form method="GET" class="flex items-center gap-3 flex-wrap">
+      <input type="text" name="q" class="form-control" style="max-width:280px" placeholder="Search ticket ID, status, error…" value="{{ q }}">
+      <select name="status" class="form-select" style="max-width:180px" onchange="this.form.submit()">
+        <option value="">All statuses</option>
+        <option value="success" {% if status_filter=='success' %}selected{% endif %}>✅ success ({{ status_counts.get('success',0) }})</option>
+        <option value="failed"  {% if status_filter=='failed'  %}selected{% endif %}>❌ failed ({{ status_counts.get('failed',0) }})</option>
+        <option value="pending" {% if status_filter=='pending' %}selected{% endif %}>⏳ pending ({{ status_counts.get('pending',0) }})</option>
+        <option value="skipped" {% if status_filter=='skipped' %}selected{% endif %}>⏭️ skipped ({{ status_counts.get('skipped',0) }})</option>
+      </select>
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="order" value="{{ order }}">
+      <button type="submit" class="btn btn-secondary btn-sm">Search</button>
+      {% if q or status_filter %}
+      <a href="{{ url_for('ticket_backup') }}" class="btn btn-ghost btn-sm">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<!-- Table -->
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        {% set toggle = 'asc' if (sort == 'ticket_id' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=ticket_id&order={{ toggle }}">Ticket {{ '▼' if sort=='ticket_id' and order=='desc' else ('▲' if sort=='ticket_id' else '') }}</a></th>
+        {% set toggle = 'asc' if (sort == 'backup_status' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=backup_status&order={{ toggle }}">Status {{ '▼' if sort=='backup_status' and order=='desc' else ('▲' if sort=='backup_status' else '') }}</a></th>
+        {% set toggle = 'asc' if (sort == 'closed_at' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=closed_at&order={{ toggle }}">Closed {{ '▼' if sort=='closed_at' and order=='desc' else ('▲' if sort=='closed_at' else '') }}</a></th>
+        {% set toggle = 'asc' if (sort == 'last_backup_at' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=last_backup_at&order={{ toggle }}">Backed Up {{ '▼' if sort=='last_backup_at' and order=='desc' else ('▲' if sort=='last_backup_at' else '') }}</a></th>
+        {% set toggle = 'asc' if (sort == 'files_count' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=files_count&order={{ toggle }}">Files {{ '▼' if sort=='files_count' and order=='desc' else ('▲' if sort=='files_count' else '') }}</a></th>
+        {% set toggle = 'asc' if (sort == 'total_bytes' and order == 'desc') else 'desc' %}
+        <th class="sortable"><a href="?q={{ q }}&status={{ status_filter }}&sort=total_bytes&order={{ toggle }}">Size {{ '▼' if sort=='total_bytes' and order=='desc' else ('▲' if sort=='total_bytes' else '') }}</a></th>
+        <th>S3 Prefix</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td><a href="https://{{ subdomain }}.zendesk.com/agent/tickets/{{ item.ticket_id }}" target="_blank" style="color:var(--primary);text-decoration:none">#{{ item.ticket_id }}</a></td>
+        <td>
+          {% if item.backup_status == 'success' %}<span class="badge badge-success">success</span>
+          {% elif item.backup_status == 'failed' %}<span class="badge badge-danger">failed</span>
+          {% elif item.backup_status == 'skipped' %}<span class="badge badge-warning">skipped</span>
+          {% else %}<span class="badge badge-muted">pending</span>{% endif %}
+        </td>
+        <td class="text-sm text-muted">{{ item.closed_at.strftime('%d-%m-%Y %H:%M') if item.closed_at else '—' }}</td>
+        <td class="text-sm text-muted">{{ item.last_backup_at.strftime('%d-%m-%Y %H:%M') if item.last_backup_at else '—' }}</td>
+        <td>{{ item.files_count }}</td>
+        <td class="text-sm">
+          {% if item.total_bytes > 1048576 %}{{ '%.1f'|format(item.total_bytes / 1048576) }} MB
+          {% elif item.total_bytes > 1024 %}{{ '%.0f'|format(item.total_bytes / 1024) }} KB
+          {% elif item.total_bytes > 0 %}{{ item.total_bytes }} B
+          {% else %}—{% endif %}
+        </td>
+        <td class="font-mono text-xs text-muted truncate" style="max-width:160px" title="{{ item.s3_prefix }}">{{ item.s3_prefix }}</td>
+        <td class="text-xs text-destructive truncate" style="max-width:200px" title="{{ item.last_error }}">{{ item.last_error[:80] if item.last_error else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="text-center text-muted" style="padding:40px">No backup records yet. Click <b>Run Backup Now</b> to start.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if pagination.pages > 1 %}
+<div class="pagination">
+  {% if pagination.has_prev %}
+  <a class="page-link" href="?q={{ q }}&status={{ status_filter }}&sort={{ sort }}&order={{ order }}&page={{ pagination.prev_num }}">‹</a>
+  {% else %}
+  <span class="page-link disabled">‹</span>
+  {% endif %}
+  {% set last_shown = namespace(val=0) %}
+  {% for p in pagination.iter_pages() %}
+    {% if p != last_shown.val + 1 and last_shown.val != 0 %}
+    <span class="page-link disabled">…</span>
+    {% endif %}
+    <a class="page-link {% if p == pagination.page %}active{% endif %}" href="?q={{ q }}&status={{ status_filter }}&sort={{ sort }}&order={{ order }}&page={{ p }}">{{ p }}</a>
+    {% set last_shown.val = p %}
+  {% endfor %}
+  {% if pagination.has_next %}
+  <a class="page-link" href="?q={{ q }}&status={{ status_filter }}&sort={{ sort }}&order={{ order }}&page={{ pagination.next_num }}">›</a>
+  {% else %}
+  <span class="page-link disabled">›</span>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function runBackupNow() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting…';
+  fetch('/api/ticket_backup_now', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.success) {
+        showToast(d.message, 'success');
+        pollStatus();
+      } else {
+        showToast(d.message || 'Failed', 'danger');
+        btn.disabled = false;
+        btn.innerHTML = 'Run Backup Now';
+      }
+    })
+    .catch(() => { showToast('Request failed','danger'); btn.disabled = false; btn.innerHTML = 'Run Backup Now'; });
+}
+
+function pollStatus() {
+  const el = document.getElementById('jobStatus');
+  const btn = document.getElementById('runBtn');
+  const poll = setInterval(() => {
+    fetch('/api/ticket_backup_status').then(r=>r.json()).then(d => {
+      if (d.running) {
+        el.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;margin-right:6px"></span> Backup running…';
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Running…';
+      } else {
+        clearInterval(poll);
+        el.textContent = d.next_scheduled_run ? 'Next run: ' + fmtDT(d.next_scheduled_run) : '';
+        btn.disabled = false;
+        btn.innerHTML = 'Run Backup Now';
+        if (d.summary) {
+          showToast('Backup finished — ' + (d.summary.tickets_backed_up||0) + ' tickets backed up', 'success');
+          setTimeout(() => location.reload(), 2000);
+        }
+      }
+    }).catch(() => {});
+  }, 3000);
+}
+
+// Initial status check
+fetch('/api/ticket_backup_status').then(r=>r.json()).then(d => {
+  const el = document.getElementById('jobStatus');
+  if (d.running) { pollStatus(); }
+  else if (d.next_scheduled_run) { el.textContent = 'Next: ' + fmtDT(d.next_scheduled_run); }
+}).catch(() => {});
+</script>
+{% endblock %}

@@ -1,362 +1,421 @@
-# Zendesk to Wasabi B2 Attachment Offloader
+# z2w — Zendesk to Wasabi Offloader
 
-Automated system to offload attachments from Zendesk tickets to Wasabi B2 cloud storage with daily scheduling and email reporting.
+Automated system that offloads Zendesk ticket attachments and inline images to **Wasabi S3-compatible storage**, replacing the original URLs in ticket comments so Zendesk storage costs decrease over time.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Architecture](#architecture)
+4. [Installation (Debian/Ubuntu)](#installation-debianubuntu)
+5. [Configuration](#configuration)
+6. [Running as a Systemd Service](#running-as-a-systemd-service)
+7. [Admin Panel](#admin-panel)
+8. [How It Works](#how-it-works)
+9. [Backup System](#backup-system)
+10. [Troubleshooting](#troubleshooting)
+11. [Security](#security)
+
+---
+
+## Overview
+
+**z2w** monitors Zendesk for tickets with attachments (and inline images). Every 5 minutes it:
+
+1. Fetches new closed/solved tickets with attachments
+2. Downloads each file from Zendesk CDN
+3. Uploads it to a configured Wasabi bucket
+4. Updates the comment body in Zendesk to point to the Wasabi URL
+5. Redacts the original Zendesk attachment
+
+An admin panel (Flask web app) provides full visibility into processed tickets, offload logs, storage statistics, a recheck-all report, and an embedded Zendesk Explorer view.
+
+---
 
 ## Features
 
-### Core Offloading Features
-- ✅ **Automatic Ticket Processing**: Fetches all tickets from Zendesk and processes only new tickets
-- ✅ **Smart Tracking**: Tracks processed tickets in SQLite database to avoid reprocessing
-- ✅ **Attachment Handling**: Downloads and processes both regular attachments and inline images from ticket comments
-- ✅ **Wasabi B2 Integration**: Uploads all attachments to Wasabi B2 cloud storage (S3-compatible)
-- ✅ **Zendesk Cleanup**: Replaces attachments in Zendesk comments with Wasabi links and deletes original attachments
-- ✅ **Inline Image Support**: Handles inline images embedded in comments, replaces them with Wasabi links
-- ✅ **File Organization**: Organizes files by date in folders (`YYYYMMDD/`)
-- ✅ **Smart Naming**: Renames files with ticket ID and date prefix (`ticketID_YYYYMMDD_filename`)
-- ✅ **Ticket Marking**: Automatically marks tickets as read after successful processing
+| Feature | Detail |
+|---|---|
+| **Continuous offload** | Runs every 5 minutes via APScheduler |
+| **Inline image tracking** | Counts inlines uploaded and deleted per run |
+| **Recheck-all report** | Scans all solved tickets to catch any missed attachments |
+| **Storage Usage page** | Per-bucket breakdown with live Wasabi size query |
+| **Zendesk Explorer** | Embedded Explorer iframe with OAuth SSO pass-through |
+| **Smart notifications** | Telegram / Slack / email reports sent only when work was done |
+| **OAuth login** | Microsoft Entra ID (Azure AD) OIDC + local password fallback |
+| **Dark mode UI** | Figtree font, oklch colour system, responsive sidebar |
+| **SQLite WAL mode** | Concurrent read/write with minimal locking |
+| **Per-ticket logging** | Every offload action logged to `offload_logs` + `processed_tickets` |
+| **Backup system** | Daily tar.gz snapshots of database + logs, Wasabi-archived copies |
+| **SSL** | Self-signed cert auto-generated on first run; swap for real cert as needed |
 
-### Scheduling & Automation
-- ✅ **Configurable Scheduling**: Daily execution at configurable time (default: 00:00 GMT)
-- ✅ **Manual Trigger**: Run offload jobs on-demand from admin panel
-- ✅ **Scheduler Control**: Start/stop scheduler from web interface
-- ✅ **Automatic Log Archiving**: Daily archiving of old logs (configurable retention)
+---
 
-### Multi-Channel Reporting
-- ✅ **Email Reports**: Detailed HTML-formatted email reports with statistics and file lists
-- ✅ **Telegram Reports**: Send formatted reports to Telegram channels/bots
-- ✅ **Slack Reports**: Send rich formatted reports to Slack via webhooks
-- ✅ **Multi-Channel Support**: Configure and use multiple reporting channels simultaneously
-- ✅ **Error Reporting**: Comprehensive error tracking and reporting in all channels
+## Architecture
 
-### Web Admin Panel
-- ✅ **Secure Login**: Password-protected admin interface
-- ✅ **Dashboard**: Real-time statistics, recent logs, and scheduler status
-- ✅ **Settings Management**: Web-based configuration with database and .env file synchronization
-- ✅ **Connection Testing**: Test Zendesk and Wasabi connections directly from the interface
-- ✅ **Ticket Browser**: View all processed tickets with pagination and file links
-- ✅ **Log Viewer**: Browse detailed offload execution logs with file information
-- ✅ **HTTPS Support**: Optional SSL/HTTPS configuration for secure access
-- ✅ **Responsive Design**: Modern, user-friendly web interface
+```
+z2w/
+├── main.py                # Flask app factory, routes, OAuth
+├── admin_panel.py         # Flask Blueprint (dashboard, tickets, logs, settings, explorer)
+├── offloader.py           # Core offload engine (download → upload → patch Zendesk)
+├── scheduler.py           # APScheduler jobs (offload every 5 min, backup daily)
+├── database.py            # SQLite helpers, WAL mode, migrations
+├── config.py              # .env loader + defaults
+├── zendesk_client.py      # Zendesk REST API wrapper
+├── wasabi_client.py       # boto3/S3 wrapper for Wasabi
+├── oauth_auth.py          # Microsoft OIDC flow
+├── email_reporter.py      # SMTP summary emails
+├── telegram_reporter.py   # Telegram Bot API summaries
+├── slack_reporter.py      # Slack Incoming Webhook summaries
+├── logger_config.py       # Rotating file + console logging
+├── password_generator.py  # Admin password hash utility
+├── templates/             # Jinja2 HTML templates (dark mode)
+│   ├── base.html          # Shared layout, sidebar, CSS design system
+│   ├── dashboard.html     # Stats + recent offload log
+│   ├── tickets.html       # Processed tickets table (paginated)
+│   ├── logs.html          # Offload logs table (paginated, filterable)
+│   ├── settings.html      # Live .env editor
+│   ├── login.html         # Login page (password + OAuth)
+│   └── ...
+├── static/                # Favicon, logo assets
+├── logs/                  # Daily rotating log files
+├── z2w.db                 # SQLite database (auto-created)
+├── requirements.txt
+└── .env                   # Runtime configuration (not in git)
+```
 
-### Database & Logging
-- ✅ **SQLite Database**: Lightweight, file-based database for tracking
-- ✅ **Processed Tickets Tracking**: Stores ticket IDs, status, attachment counts, and error messages
-- ✅ **Offload Logs**: Detailed execution logs with timestamps, statistics, and file information
-- ✅ **Settings Storage**: Database-backed settings with .env file synchronization
-- ✅ **Automatic Migration**: Database schema migration for seamless updates
-- ✅ **File Path Storage**: Stores Wasabi S3 keys for easy file retrieval
-- ✅ **Application Logging**: Comprehensive logging with automatic log archiving
+---
 
-### Configuration & Security
-- ✅ **Environment Variables**: Flexible .env file configuration
-- ✅ **Database Settings**: Settings stored in database with .env sync
-- ✅ **HTTPS/SSL Support**: Optional SSL certificate configuration
-- ✅ **Session Management**: Secure Flask session handling
-- ✅ **Error Handling**: Comprehensive error tracking and graceful failure handling
+## Installation (Debian/Ubuntu)
 
-## Installation
+### Prerequisites
 
-1. **Clone or download this repository**
+- Debian 12 / Ubuntu 22.04+ (64-bit)
+- Python 3.11+
+- `sudo` access
+- A Zendesk admin API token
+- A Wasabi account + bucket
+- (Optional) Microsoft Entra App Registration for OAuth
 
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 1. Install system packages
 
-3. **Configure environment variables:**
-   - Copy `.env.example` to `.env`
-   - Fill in all required configuration values
+```bash
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv git curl openssl
+```
+
+### 2. Clone the repository
+
+```bash
+sudo mkdir -p /opt/z2w
+sudo chown $USER:$USER /opt/z2w
+git clone <your-repo-url> /opt/z2w
+cd /opt/z2w
+```
+
+### 3. Create virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 4. Create `.env` configuration
+
+```bash
+cp .env.example .env   # if provided, otherwise create from scratch
+nano .env
+```
+
+See [Configuration](#configuration) for all variables.
+
+### 5. Generate SSL certificate
+
+```bash
+python3 generate_ssl_cert.py
+```
+
+This creates `cert.pem` and `key.pem` in `/opt/z2w`. Replace with a CA-signed certificate for production.
+
+### 6. Set admin password
+
+```bash
+python3 password_generator.py
+```
+
+Copy the generated hash into your `.env` as `ADMIN_PASSWORD_HASH`.
+
+### 7. Set permissions
+
+```bash
+chmod 600 .env key.pem cert.pem
+```
+
+---
 
 ## Configuration
 
-Create a `.env` file with the following settings:
+All settings live in `/opt/z2w/.env`. The table below lists every recognised key.
 
-### Zendesk Configuration
-- `ZENDESK_SUBDOMAIN`: Your Zendesk subdomain (e.g., "mycompany" for mycompany.zendesk.com)
-- `ZENDESK_EMAIL`: Your Zendesk account email
-- `ZENDESK_API_TOKEN`: Your Zendesk API token (generate in Zendesk Admin > Apps and integrations > APIs > Zendesk API)
+### Zendesk
 
-### Wasabi B2 Configuration
-- `WASABI_ENDPOINT`: Wasabi endpoint URL (e.g., https://s3.wasabisys.com)
-- `WASABI_ACCESS_KEY`: Your Wasabi access key
-- `WASABI_SECRET_KEY`: Your Wasabi secret key
-- `WASABI_BUCKET_NAME`: Target bucket name
+| Key | Example | Description |
+|---|---|---|
+| `ZENDESK_SUBDOMAIN` | `acme` | Your Zendesk subdomain (before `.zendesk.com`) |
+| `ZENDESK_EMAIL` | `admin@acme.com` | API user email |
+| `ZENDESK_API_TOKEN` | `abc123…` | Zendesk Admin API token |
+| `ZENDESK_EXPLORER_URL` | `https://acme.zendesk.com/explore` | URL embedded in Explorer tab |
 
-### Email Configuration
-- `SMTP_SERVER`: SMTP server address (default: smtp.gmail.com)
-- `SMTP_PORT`: SMTP port (default: 587)
-- `SMTP_USERNAME`: SMTP username/email
-- `SMTP_PASSWORD`: SMTP password or app password
-- `REPORT_EMAIL`: Email address to receive reports (default: it@go4rex.com)
+### Wasabi / S3
 
-### Telegram Configuration (Optional)
-- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token (for Telegram reports)
-- `TELEGRAM_CHAT_ID`: Your Telegram chat ID or channel ID
+| Key | Example | Description |
+|---|---|---|
+| `WASABI_ACCESS_KEY` | `AKIA…` | Wasabi access key |
+| `WASABI_SECRET_KEY` | `…` | Wasabi secret key |
+| `WASABI_BUCKET_NAME` | `zd-attachments` | Bucket for attachments |
+| `WASABI_REGION` | `ap-southeast-1` | Bucket region |
+| `WASABI_ENDPOINT_URL` | `https://s3.ap-southeast-1.wasabisys.com` | Wasabi endpoint |
 
-### Slack Configuration (Optional)
-- `SLACK_WEBHOOK_URL`: Your Slack webhook URL (for Slack reports)
+### Application
 
-### Scheduler Configuration
-- `SCHEDULER_TIMEZONE`: Timezone for scheduler (default: UTC)
-- `SCHEDULER_HOUR`: Hour to run scheduled job (default: 0)
-- `SCHEDULER_MINUTE`: Minute to run scheduled job (default: 0)
+| Key | Default | Description |
+|---|---|---|
+| `SECRET_KEY` | *(required)* | Flask session secret — use a long random string |
+| `ADMIN_PASSWORD_HASH` | *(required)* | bcrypt hash generated by `password_generator.py` |
+| `PORT` | `5000` | HTTPS port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
-### Admin Panel
-- `ADMIN_PANEL_PORT`: Port for admin panel (default: 5000)
-- `ADMIN_PANEL_HOST`: Host for admin panel (default: 0.0.0.0)
-- `SECRET_KEY`: Secret key for Flask sessions (change in production!)
+### Notifications
 
-### SSL/HTTPS Configuration (Optional)
-- `SSL_CERT_PATH`: Path to SSL certificate file (e.g., `cert.pem`)
-- `SSL_KEY_PATH`: Path to SSL private key file (e.g., `key.pem`)
+| Key | Example | Description |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | `123:ABC…` | Bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | `-100123456` | Target chat/channel ID |
+| `SLACK_WEBHOOK_URL` | `https://hooks.slack.com/…` | Slack Incoming Webhook URL |
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP server |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_USER` | `alerts@acme.com` | SMTP username |
+| `SMTP_PASSWORD` | `…` | SMTP password |
+| `REPORT_EMAIL_TO` | `team@acme.com` | Recipient address for email reports |
+| `STORAGE_REPORT_INTERVAL` | `24` | Hours between storage-usage reports (Telegram/Slack) |
 
-If both `SSL_CERT_PATH` and `SSL_KEY_PATH` are set and the files exist, the app will run with HTTPS. Otherwise, it will use HTTP.
+### OAuth (Microsoft Entra)
 
-## Usage
+| Key | Description |
+|---|---|
+| `AZURE_CLIENT_ID` | App Registration client ID |
+| `AZURE_CLIENT_SECRET` | App Registration client secret |
+| `AZURE_TENANT_ID` | Entra tenant ID |
+| `AZURE_REDIRECT_URI` | Must match the redirect URI registered in Azure (`https://host/auth/callback`) |
 
-### Start the Application
+---
+
+## Running as a Systemd Service
+
+### Create service file
 
 ```bash
-python main.py
+sudo nano /etc/systemd/system/z2w.service
 ```
 
-The application will:
-1. Initialize the database
-2. Start the scheduler (runs daily at 00:00 GMT)
-3. Launch the admin panel web interface
-4. Prompt you to create a custom admin password on the first successful login
+```ini
+[Unit]
+Description=Zendesk to Wasabi Offloader
+After=network.target
 
-### Access Admin Panel
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/z2w
+ExecStart=/opt/z2w/.venv/bin/python /opt/z2w/main.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
 
-Open your browser and navigate to:
+[Install]
+WantedBy=multi-user.target
 ```
-http://localhost:5000
+
+### Enable and start
+
+```bash
+sudo chown -R www-data:www-data /opt/z2w
+sudo systemctl daemon-reload
+sudo systemctl enable z2w.service
+sudo systemctl start z2w.service
+sudo systemctl status z2w.service
 ```
 
-Or if HTTPS is configured:
+### Useful commands
+
+```bash
+sudo systemctl restart z2w.service      # apply config/code changes
+sudo systemctl stop z2w.service
+journalctl -u z2w.service -f            # live logs
+tail -f /opt/z2w/logs/app.log.*         # app-level logs
 ```
-https://localhost:5000
-```
 
-**Note**: If using self-signed certificates, your browser will show a security warning. This is normal for development/testing. For production, use certificates from a trusted Certificate Authority (CA).
+---
 
-### Admin Panel Features
+## Admin Panel
 
-#### Dashboard
-- View total processed tickets and attachments
-- See recent offload logs
-- Check scheduler status and next run time
-- Quick actions: Run Now, Start/Stop Scheduler
+Access at `https://<server-ip>:<PORT>/` (default port 5000).
 
-#### Settings Page
-- Configure all Zendesk credentials
-- Configure all Wasabi B2 credentials
-- Configure email, Telegram, and Slack reporting
-- Test connections to Zendesk and Wasabi
-- Settings are saved to both database and .env file
-- Real-time configuration updates
+### Dashboard
 
-#### Tickets Page
-- Browse all processed tickets with pagination
-- View ticket details: ID, processing date, attachment count, status
-- Access direct links to uploaded files in Wasabi
-- Filter and search capabilities
-- View error messages for failed tickets
+Real-time stats: total tickets processed, attachments offloaded, storage saved, inline images handled. Shows the last 20 offload log entries with inline upload/delete counts.
 
-#### Logs Page
-- View detailed execution logs for each offload run
-- See statistics: tickets processed, attachments uploaded, errors
-- Access links to all uploaded files
-- View full execution details and error information
-- Pagination for browsing historical logs
+### Offload Logs
 
-### Manual Operations
+Paginated, filterable table of every offload run. Columns: date, tickets checked, offloaded, errors, inlines uploaded/deleted, duration, status.
 
-From the admin panel dashboard, you can:
-- **Run Now**: Manually trigger an offload job immediately
-- **Start Scheduler**: Start the automatic scheduler
-- **Stop Scheduler**: Stop the automatic scheduler
-- **View Status**: See if scheduler is running and next scheduled run time
+### Processed Tickets
+
+Full list of every ticket that has had attachments offloaded. Click a ticket ID to open it in Zendesk.
+
+### Recheck Report
+
+Triggers a full scan of all solved Zendesk tickets against the local database, reporting any tickets that were missed. Results show as a live-updating progress feed.
+
+### Storage Usage
+
+Per-bucket breakdown of total objects and bytes stored on Wasabi, fetched live. Includes a per-ticket storage estimate chart.
+
+### Zendesk Explorer
+
+Embedded Zendesk Explorer analytics application via iframe, using your existing Zendesk session.
+
+### Settings
+
+Live `.env` editor — change any configuration value without restarting the service (most settings reload on next scheduler tick; OAuth/port changes require a restart).
+
+---
 
 ## How It Works
 
-### 1. Ticket Processing
-- Fetches all tickets from Zendesk using the Zendesk API
-- Filters to only process new tickets (not already in database)
-- For each new ticket:
-  - Downloads all regular attachments from comments
-  - Downloads all inline images embedded in comments
-  - Processes attachments and images separately to avoid duplicates
+### Offload cycle (every 5 minutes)
 
-### 2. File Upload & Organization
-- Uploads each attachment/image to Wasabi B2 storage
-- Creates date-based folders: `YYYYMMDD/`
-- Renames files with format: `ticketID_YYYYMMDD_original_filename`
-- Stores original content type for proper file handling
-- Generates presigned URLs for file access (1-year expiration)
+1. **Fetch** — calls Zendesk Search API for recently updated `solved`/`closed` tickets
+2. **Filter** — skips tickets already in `processed_tickets` table
+3. **Download** — streams each attachment from `attachments.zendesk.com`
+4. **Upload** — puts the file in Wasabi at `<bucket>/tickets/<ticket_id>/<filename>`
+5. **Patch** — updates the Zendesk comment body, replacing CDN URLs with Wasabi URLs
+6. **Redact** — deletes the original Zendesk attachment to free Zendesk storage
+7. **Log** — writes to `offload_logs` and `processed_tickets`; emits Telegram/Slack/email if work was done
 
-### 3. Zendesk Cleanup
-- Replaces attachment references in Zendesk comments with Wasabi links
-- Replaces inline image references with Wasabi links
-- Deletes original attachments from Zendesk after successful upload
-- Marks tickets as read after processing
+### Inline images
 
-### 4. Tracking & Logging
-- Records processed tickets in SQLite database with:
-  - Ticket ID, processing timestamp, attachment count
-  - Status (processed/error), error messages
-  - Wasabi file paths (S3 keys) for easy retrieval
-- Creates detailed offload logs with:
-  - Run date, tickets processed, attachments uploaded
-  - Error count, status, and full execution details
-  - All S3 keys for uploaded files
+HTML comment bodies are scanned for `<img src="…attachments.zendesk.com…">` tags. Matched images are uploaded to Wasabi and the `src` attribute is patched in place. The `inlines_uploaded` and `inlines_deleted` counts are tracked separately in the offload log.
 
-### 5. Scheduling
-- Runs automatically at configured time (default: daily at 00:00 GMT)
-- Can be manually triggered from admin panel
-- Scheduler can be started/stopped from web interface
-- Automatic log archiving runs daily after offload job
+### Recheck-all
 
-### 6. Multi-Channel Reporting
-- Sends reports to all configured channels after each run:
-  - **Email**: HTML-formatted report with statistics, file lists, and errors
-  - **Telegram**: Formatted message with emojis and summary
-  - **Slack**: Rich formatted message with attachments and fields
-- Reports include:
-  - Run date and time
-  - Tickets found and processed
-  - Attachments uploaded and deleted
-  - Error details (if any)
-  - Ticket-by-ticket breakdown
+Fetches the *complete* solved ticket history from Zendesk (all pages) and compares against the local DB. Any ticket present in Zendesk but missing from `processed_tickets` is queued for immediate offload.
 
-## File Structure
+---
 
-```
-z2w1/
-├── main.py                 # Main entry point
-├── config.py              # Configuration management
-├── database.py             # Database models
-├── zendesk_client.py       # Zendesk API client
-├── wasabi_client.py        # Wasabi B2 client
-├── offloader.py            # Main offload logic
-├── scheduler.py            # Scheduled job runner
-├── email_reporter.py       # Email reporting
-├── telegram_reporter.py    # Telegram reporting
-├── slack_reporter.py       # Slack reporting
-├── admin_panel.py          # Flask web interface
-├── logger_config.py        # Logging configuration
-├── generate_ssl_cert.py    # SSL certificate generator (optional)
-├── templates/              # HTML templates
-│   ├── base.html
-│   ├── dashboard.html
-│   ├── settings.html
-│   ├── tickets.html
-│   └── logs.html
-├── requirements.txt        # Python dependencies
-├── .env.example           # Environment variables template
-└── README.md              # This file
+## Backup System
+
+Daily backups run automatically via the APScheduler job in `scheduler.py`.
+
+### What is backed up
+
+| Item | Path | Backup method |
+|---|---|---|
+| SQLite database | `z2w.db` | Hot copy (WAL checkpoint first) |
+| Application logs | `logs/` | Entire directory tree |
+| Configuration | `.env` | Included in archive |
+
+### Backup storage
+
+1. **Local**: `/opt/z2w/backups/z2w-backup-YYYY-MM-DD.tar.gz`
+2. **Wasabi**: uploaded to `<WASABI_BUCKET_NAME>/backups/` and kept for 30 days
+
+### Restore procedure
+
+```bash
+# Stop service
+sudo systemctl stop z2w.service
+
+# Extract backup
+cd /opt/z2w
+tar -xzf backups/z2w-backup-YYYY-MM-DD.tar.gz
+
+# Restore specific files
+cp backup/z2w.db ./z2w.db
+cp backup/.env ./.env
+
+# Restart
+sudo systemctl start z2w.service
 ```
 
-## Database
+### Manual backup
 
-The application uses SQLite database (`tickets.db`) to track:
+```bash
+cd /opt/z2w
+source .venv/bin/activate
+python3 -c "from scheduler import run_backup; run_backup()"
+```
 
-### processed_tickets Table
-- `id`: Primary key
-- `ticket_id`: Zendesk ticket ID (unique, indexed)
-- `processed_at`: Timestamp when ticket was processed
-- `attachments_count`: Number of attachments uploaded
-- `status`: Processing status (processed/error)
-- `error_message`: Error details if processing failed
-- `wasabi_files`: JSON array of Wasabi S3 keys for uploaded files
-
-### offload_logs Table
-- `id`: Primary key
-- `run_date`: Timestamp of offload execution (indexed)
-- `tickets_processed`: Number of tickets processed
-- `attachments_uploaded`: Number of attachments uploaded
-- `errors_count`: Number of errors encountered
-- `status`: Execution status (completed/completed_with_errors)
-- `report_sent`: Whether reports were sent successfully
-- `details`: JSON string with full execution details and file information
-
-### settings Table
-- `id`: Primary key
-- `key`: Setting key (unique)
-- `value`: Setting value
-- `description`: Optional description
-- `updated_at`: Last update timestamp
-
-Settings are synchronized between database and .env file for flexibility.
+---
 
 ## Troubleshooting
 
-### Connection Issues
+### Service won't start
 
-Use the "Test Connection" buttons in the Settings page to verify:
-- Zendesk API credentials
-- Wasabi B2 credentials
+```bash
+journalctl -u z2w.service -n 50 --no-pager
+```
 
-### Email Not Sending
+Common causes:
+- Missing `.env` file or required key not set
+- Port already in use — change `PORT` in `.env`
+- SSL cert not generated — run `python3 generate_ssl_cert.py`
+- Wrong file ownership — `sudo chown -R www-data:www-data /opt/z2w`
 
-- Verify SMTP credentials
-- For Gmail, use an App Password instead of regular password
-- Check firewall/network settings
+### No attachments being offloaded
 
-### Scheduler Not Running
+1. Check Zendesk credentials: `ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN`
+2. Verify API token has **Admin** scope (Attachments write + Tickets write)
+3. Check logs: `tail -f /opt/z2w/logs/app.log.*`
+4. Confirm tickets are in `solved` or `closed` state
 
-- Check scheduler status on dashboard
-- Verify system timezone is correct
-- Check logs for errors
+### Wasabi upload errors
 
-## HTTPS Setup
+1. Verify `WASABI_ENDPOINT_URL` matches the bucket's region
+2. Ensure the IAM user/policy has `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`
+3. Check bucket CORS if accessing Wasabi URLs in browser
 
-### Option 1: Use Your Own Certificates
+### OAuth login not working
 
-1. Obtain SSL certificates from a Certificate Authority (CA) or use your existing certificates
-2. Add to your `.env` file:
-   ```
-   SSL_CERT_PATH=/path/to/cert.pem
-   SSL_KEY_PATH=/path/to/key.pem
-   ```
-3. Restart the application
+1. Confirm `AZURE_REDIRECT_URI` exactly matches what is registered in the Azure App Registration
+2. Ensure `https://` is used (HTTP will fail with Entra)
+3. Check that the App Registration has **User.Read** delegated permission and admin consent granted
 
-### Option 2: Generate Self-Signed Certificates (Development Only)
+### Database errors / locked
 
-For local development and testing, you can generate self-signed certificates:
+```bash
+sqlite3 /opt/z2w/z2w.db "PRAGMA integrity_check;"
+sqlite3 /opt/z2w/z2w.db "PRAGMA wal_checkpoint(TRUNCATE);"
+```
 
-1. Install the cryptography library (if not already installed):
-   ```bash
-   pip install cryptography
-   ```
+---
 
-2. Run the certificate generator:
-   ```bash
-   python generate_ssl_cert.py
-   ```
+## Security
 
-3. This will create `cert.pem` and `key.pem` in the current directory
+- **HTTPS only** — Flask is served with TLS; replace the self-signed cert for internet-facing deployments
+- **Secrets in `.env`** — never commit `.env` to source control; file permissions should be `600`
+- **Session secrets** — set `SECRET_KEY` to a long random string (`python3 -c "import secrets; print(secrets.token_hex(32))"`)
+- **Admin password** — stored as bcrypt hash; regenerate with `python3 password_generator.py`
+- **OAuth** — Microsoft Entra enforces MFA and conditional access policies upstream
+- **Wasabi keys** — use a dedicated IAM user scoped to the offloader bucket only
+- **Log rotation** — daily rotation with archive; logs contain ticket IDs but not attachment data
 
-4. Add to your `.env` file:
-   ```
-   SSL_CERT_PATH=cert.pem
-   SSL_KEY_PATH=key.pem
-   ```
+To report a security issue, contact the maintainer directly rather than opening a public issue.
 
-5. Restart the application
+---
 
-**Important**: Self-signed certificates are for development only. Browsers will show security warnings. For production, use certificates from a trusted CA.
-
-## Security Notes
-
-- Change `SECRET_KEY` in production
-- Keep `.env` file secure (don't commit to version control)
-- Use strong API tokens and passwords
-- Enable HTTPS in production using trusted SSL certificates
-- Consider running behind a reverse proxy (nginx, Apache) with HTTPS for additional security
-
-## License
-
-This project is provided as-is for internal use.
-
-
+*z2w · RHC Solutions*

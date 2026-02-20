@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}Storage Usage — z2w{% endblock %}
+{% block page_title %}Zendesk Storage Usage{% endblock %}
+{% block page_sub %}Live snapshot of attachments still stored in Zendesk{% endblock %}
+{% block topbar_actions %}
+{% if last_updated %}
+<span class="badge badge-secondary">Updated {{ last_updated.strftime('%d-%m-%Y %H:%M') if last_updated is not string else last_updated[:16] }}</span>
+{% endif %}
+{% if next_run %}
+<span class="badge badge-muted">Next: {{ next_run }}</span>
+{% endif %}
+<button class="btn btn-outline btn-sm" id="btnRefresh" onclick="triggerRefresh()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  Refresh Now
+</button>
+{% endblock %}
+
+{% block content %}
+{% if is_empty %}
+<div class="card" style="max-width:560px">
+  <div class="card-body" style="padding:40px;text-align:center">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="40" height="40" style="color:var(--muted-foreground);margin-bottom:16px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 12 12"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></svg>
+    <div class="page-title" style="font-size:16px;margin-bottom:8px">Storage data is being collected…</div>
+    <p class="text-muted" style="font-size:13px">The snapshot job runs automatically on boot and scans all Zendesk tickets. This may take a few minutes for large accounts.</p>
+    <button class="btn btn-primary btn-sm mt-4" onclick="triggerRefresh()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+      Start Refresh Now
+    </button>
+    <div id="refreshStatus" class="mt-3 text-muted text-sm"></div>
+  </div>
+</div>
+{% else %}
+
+{# ── Scan progress banner ──────────────────────── #}
+{% if scan_scanned < scan_total %}
+<div class="card mb-4" style="border-color: color-mix(in oklch, var(--warning) 40%, transparent);">
+  <div class="card-body" style="padding:12px 18px; display:flex; align-items:center; gap:14px;">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" style="color:var(--warning); animation:spin 1.5s linear infinite; flex-shrink:0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    <div style="flex:1">
+      <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Storage scan in progress</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="flex:1; height:6px; background:var(--muted); border-radius:99px; overflow:hidden;">
+          <div style="height:100%; width:{{ scan_pct }}%; background:var(--warning); border-radius:99px; transition:width .3s;"></div>
+        </div>
+        <span class="text-muted text-sm" style="white-space:nowrap">{{ "{:,}".format(scan_scanned) }} / {{ "{:,}".format(scan_total) }} tickets ({{ scan_pct }}%)</span>
+      </div>
+      <p class="text-muted" style="font-size:11.5px; margin-top:4px">Sizes below reflect only scanned tickets. Full data available once the scan completes.</p>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Summary cards — 2 rows ────────────────────── #}
+<div class="stat-grid mb-4" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+  {# Zendesk plan limit #}
+  {% if plan_limit_gb > 0 %}
+  {% set plan_limit_bytes = plan_limit_gb * 1073741824 %}
+  {% set plan_pct = [((total_bytes or 0) / plan_limit_bytes * 100), 100] | min if plan_limit_bytes else 0 %}
+  {% set remaining_bytes = [plan_limit_bytes - (total_bytes or 0), 0] | max %}
+  <div class="stat-card">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+      Zendesk Plan
+    </div>
+    <div class="stat-value" style="color:var(--foreground)">{{ plan_limit_gb | int }} GB</div>
+    <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+      <div style="flex:1; height:5px; background:var(--muted); border-radius:99px; overflow:hidden;">
+        <div style="height:100%; width:{{ "%.1f"|format(plan_pct) }}%; background:var(--primary); border-radius:99px;"></div>
+      </div>
+      <span class="text-muted" style="font-size:11px">{{ "%.1f"|format(plan_pct) }}%</span>
+    </div>
+    {% set rem_gb = remaining_bytes / 1073741824 %}
+    <div class="stat-sub">{{ "%.1f"|format(rem_gb) }} GB remaining</div>
+  </div>
+  {% else %}
+  <div class="stat-card">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
+      Zendesk Plan
+    </div>
+    <div class="text-muted" style="font-size:13px;margin-top:4px">Not configured</div>
+    <div class="stat-sub">Set in <a href="/settings" style="color:var(--primary)">Settings</a></div>
+  </div>
+  {% endif %}
+
+  {# Still in Zendesk #}
+  <div class="stat-card danger">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Still in Zendesk
+    </div>
+    {% set gb = (total_bytes or 0) / 1073741824 %}
+    {% if gb >= 1 %}
+    <div class="stat-value">{{ "%.2f"|format(gb) }} GB</div>
+    {% else %}
+    <div class="stat-value">{{ "%.0f"|format((total_bytes or 0) / 1048576) }} MB</div>
+    {% endif %}
+    <div class="stat-sub">{{ "{:,}".format(total_files or 0) }} files · {{ "{:,}".format(total_tickets) }} tickets</div>
+  </div>
+
+  {# Freed from Zendesk (offloaded) #}
+  <div class="stat-card success">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+      Freed from Zendesk
+    </div>
+    {% set off_gb = (offloaded_bytes or 0) / 1073741824 %}
+    {% if off_gb >= 1 %}
+    <div class="stat-value">{{ "%.2f"|format(off_gb) }} GB</div>
+    {% else %}
+    <div class="stat-value">{{ "%.0f"|format((offloaded_bytes or 0) / 1048576) }} MB</div>
+    {% endif %}
+    <div class="stat-sub">{{ "{:,}".format(offloaded_tickets) }} of {{ "{:,}".format(tickets_with_files) }} tickets with files</div>
+  </div>
+</div>
+
+<!-- Status filter tabs -->
+<div class="tabs">
+  <button class="tab-btn {% if not status_filter %}active{% endif %}"
+    onclick="location.href='{{ url_for('storage_report', sort=sort, order=order, q=q) }}'">
+    All <span class="badge badge-secondary" style="margin-left:4px">{{ total_tickets }}</span>
+  </button>
+  {% for st, cnt in status_counts.items()|sort %}{% if st %}
+  <button class="tab-btn {% if status_filter == st %}active{% endif %}"
+    onclick="location.href='{{ url_for('storage_report', status=st, sort=sort, order=order, q=q) }}'">
+    {{ st }} <span class="badge badge-secondary" style="margin-left:4px">{{ cnt }}</span>
+  </button>
+  {% endif %}{% endfor %}
+</div>
+
+<!-- Search & sort bar -->
+<form method="GET" action="{{ url_for('storage_report') }}" class="flex flex-wrap gap-2 mb-4">
+  <input type="text" class="form-control" name="q" value="{{ q or '' }}" placeholder="Search subject or ticket ID" style="max-width:280px">
+  {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+  <input type="hidden" name="sort"  value="{{ sort  or 'total_size' }}">
+  <input type="hidden" name="order" value="{{ order or 'desc' }}">
+  <button type="submit" class="btn btn-primary btn-sm">Search</button>
+  <a href="{{ url_for('storage_report') }}" class="btn btn-outline btn-sm">Clear</a>
+</form>
+
+{% macro sort_link(col, label) %}
+  {% set cur_sort  = sort  or 'total_size' %}
+  {% set cur_order = order or 'desc' %}
+  {% if cur_sort == col %}
+    {% set next_order = 'asc' if cur_order == 'desc' else 'desc' %}
+    {% set icon = '↑' if cur_order == 'asc' else '↓' %}
+  {% else %}{% set next_order = 'desc' %}{% set icon = '↕' %}{% endif %}
+  <a href="?sort={{ col }}&order={{ next_order }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ label }} <span class="text-muted">{{ icon }}</span></a>
+{% endmacro %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ sort_link('ticket_id','Ticket ID') }}</th>
+        <th>{{ sort_link('subject','Subject') }}</th>
+        <th>{{ sort_link('zd_status','Status') }}</th>
+        <th>Files</th>
+        <th>{{ sort_link('total_size','Size in ZD') }}</th>
+        <th>{{ sort_link('last_seen_at','Last Scanned') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in tickets %}
+      <tr>
+        <td class="font-mono">
+          <a href="{{ row.ticket_url }}" target="_blank" style="color:var(--primary)">#{{ row.ticket_id }}</a>
+        </td>
+        <td class="truncate" style="max-width:240px" title="{{ row.subject or '' }}">{{ row.subject or '(no subject)' }}</td>
+        <td>
+          {% set sc = {'open':'primary','pending':'warning','solved':'success','closed':'secondary'} %}
+          <span class="badge badge-{{ sc.get(row.zd_status,'secondary') }}">{{ row.zd_status or '?' }}</span>
+        </td>
+        <td class="text-sm text-muted">
+          {% if row.attach %}{{ row.attach }} 📎{% endif %}
+          {% if row.inline %}<span style="margin-left:4px">{{ row.inline }} 🖼️</span>{% endif %}
+          {% if not row.attach and not row.inline %}—{% endif %}
+        </td>
+        <td class="font-semibold text-destructive text-sm">
+          {% set mb = (row.size_bytes or 0) / 1048576 %}
+          {% if mb >= 1000 %}{{ "%.2f"|format(mb/1024) }} GB{% elif mb >= 1 %}{{ "%.1f"|format(mb) }} MB{% else %}{{ "%.0f"|format((row.size_bytes or 0)/1024) }} KB{% endif %}
+        </td>
+        <td class="font-mono text-muted text-sm">{{ row.updated_at.strftime('%d-%m-%Y %H:%M') if row.updated_at else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted text-center" style="padding:24px">No tickets found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% set qs = ('&status=' + status_filter if status_filter else '') + ('&q=' + q|urlencode if q else '') + '&sort=' + (sort or 'total_size') + '&order=' + (order or 'desc') %}
+<nav class="pagination">
+  {% if pagination.has_prev %}<a class="page-link" href="?page={{ pagination.prev_num }}{{ qs }}">← Prev</a>{% endif %}
+  {% for pn in pagination.iter_pages() %}
+    {% if pn %}<a class="page-link {{ 'active' if pn == pagination.page else '' }}" href="?page={{ pn }}{{ qs }}">{{ pn }}</a>
+    {% else %}<span class="page-link disabled">…</span>{% endif %}
+  {% endfor %}
+  {% if pagination.has_next %}<a class="page-link" href="?page={{ pagination.next_num }}{{ qs }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
+
+<div id="refreshStatus" class="mt-3 text-muted text-sm"></div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+<script>
+function triggerRefresh() {
+  const btn = document.getElementById('btnRefresh');
+  const status = document.getElementById('refreshStatus');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Refreshing…'; }
+  status.textContent = 'Starting storage snapshot…';
+  fetch('/api/storage_report/refresh', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      status.textContent = d.message;
+      if (d.success) { setTimeout(()=>location.reload(), 5000); }
+      else if (btn) { btn.disabled=false; btn.innerHTML='Refresh Now'; }
+    }).catch(()=>{ status.textContent='Request failed'; if(btn){btn.disabled=false;btn.innerHTML='Refresh Now';} });
+}
+</script>
+{% endblock %}
