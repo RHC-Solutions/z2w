@@ -1226,6 +1226,75 @@ def ticket_sizes_json():
         db.close()
 
 
+@app.route('/api/ticket_status')
+@login_required
+def ticket_status_json():
+    """Return offload + backup status for a batch of ticket IDs.
+    Query param: ids=1,2,3 (comma-separated).
+    Response: { "<id>": { offloaded: bool, attachments_count: int, inlines_count: int,
+                           processed_at: str|null, backup_status: str|null, backed_up_at: str|null } }
+    """
+    ids_raw = request.args.get('ids', '').strip()
+    if not ids_raw:
+        return jsonify({})
+    try:
+        ticket_ids = [int(x) for x in ids_raw.split(',') if x.strip().isdigit()]
+    except ValueError:
+        return jsonify({})
+    if not ticket_ids:
+        return jsonify({})
+    db = get_db()
+    try:
+        result: dict = {str(tid): {
+            'offloaded': False,
+            'attachments_count': 0,
+            'inlines_count': 0,
+            'processed_at': None,
+            'backup_status': None,
+            'backed_up_at': None,
+        } for tid in ticket_ids}
+
+        # Offload status from processed_tickets
+        offload_rows = db.query(
+            ProcessedTicket.ticket_id,
+            ProcessedTicket.status,
+            ProcessedTicket.attachments_count,
+            ProcessedTicket.processed_at,
+            ProcessedTicket.wasabi_files,
+        ).filter(ProcessedTicket.ticket_id.in_(ticket_ids)).all()
+        for row in offload_rows:
+            key = str(row.ticket_id)
+            if key in result:
+                result[key]['offloaded'] = row.status == 'processed'
+                result[key]['attachments_count'] = row.attachments_count or 0
+                result[key]['processed_at'] = row.processed_at.isoformat() if row.processed_at else None
+                # count inlines from wasabi_files JSON
+                try:
+                    import json as _json
+                    files = _json.loads(row.wasabi_files or '[]')
+                    result[key]['inlines_count'] = sum(
+                        1 for f in files if isinstance(f, str) and '/inlines/' in f
+                    )
+                except Exception:
+                    pass
+
+        # Backup status from ticket_backup_items
+        backup_rows = db.query(
+            TicketBackupItem.ticket_id,
+            TicketBackupItem.backup_status,
+            TicketBackupItem.last_backup_at,
+        ).filter(TicketBackupItem.ticket_id.in_(ticket_ids)).all()
+        for row in backup_rows:
+            key = str(row.ticket_id)
+            if key in result:
+                result[key]['backup_status'] = row.backup_status
+                result[key]['backed_up_at'] = row.last_backup_at.isoformat() if row.last_backup_at else None
+
+        return jsonify(result)
+    finally:
+        db.close()
+
+
 @app.route('/api/wasabi_stats')
 @login_required
 def wasabi_stats_json():
