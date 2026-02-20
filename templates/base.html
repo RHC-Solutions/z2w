@@ -389,6 +389,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
         <span>Storage Usage</span>
       </a>
+      <a href="{{ url_for('ticket_backup') }}" class="nav-item {% if request.endpoint == 'ticket_backup' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Ticket Backup</span>
+      </a>
       <div class="nav-divider"></div>
       <div class="nav-section">Explorer</div>
       <a href="{{ url_for('explorer_app') }}" class="nav-item {% if request.endpoint == 'explorer_app' %}active{% endif %}">

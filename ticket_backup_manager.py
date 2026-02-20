@@ -106,7 +106,8 @@ class TicketBackupManager:
         row.updated_at = datetime.utcnow()
 
     def _ticket_closed_datetime(self, ticket: Dict) -> Optional[datetime]:
-        stamp = ticket.get('updated_at')
+        """Return the ticket's closed_at timestamp, falling back to updated_at."""
+        stamp = ticket.get('closed_at') or ticket.get('updated_at')
         if not stamp:
             return None
         try:
@@ -146,7 +147,6 @@ class TicketBackupManager:
         }
 
         wasabi = self._build_wasabi_client()
-        date_folder = datetime.utcnow().strftime('%Y%m%d')
 
         db = get_db()
         try:
@@ -170,7 +170,7 @@ class TicketBackupManager:
                             ticket_id=ticket_id,
                             closed_at=None,
                             backup_status='failed',
-                            s3_prefix=f"{date_folder}/{ticket_id}",
+                            s3_prefix=f"{datetime.utcnow().strftime('%Y%m%d')}/{ticket_id}",
                             files_count=0,
                             total_bytes=0,
                             last_error=f"ticket fetch failed HTTP {ticket_resp.status_code}",
@@ -186,13 +186,25 @@ class TicketBackupManager:
                             ticket_id=ticket_id,
                             closed_at=self._ticket_closed_datetime(ticket),
                             backup_status='skipped',
-                            s3_prefix=f"{date_folder}/{ticket_id}",
+                            s3_prefix=f"{datetime.utcnow().strftime('%Y%m%d')}/{ticket_id}",
                             files_count=0,
                             total_bytes=0,
                             last_error='ticket no longer closed',
                         )
                         db.commit()
                         continue
+
+                    # Folder = ticket's closed date (YYYYMMDD)
+                    closed_dt = self._ticket_closed_datetime(ticket)
+                    if not closed_dt:
+                        # fallback: try updated_at, then today
+                        ua = ticket.get('updated_at', '')
+                        if ua:
+                            try:
+                                closed_dt = datetime.fromisoformat(ua.replace('Z', ''))
+                            except Exception:
+                                pass
+                    date_folder = (closed_dt or datetime.utcnow()).strftime('%Y%m%d')
 
                     comments_resp = self.zendesk.session.get(
                         f"{self.zendesk.base_url}/tickets/{ticket_id}/comments.json",

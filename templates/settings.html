@@ -26,16 +26,43 @@
     </div>
   </div>
 
-  <!-- Wasabi -->
+  <!-- Attachments Offload -->
   <div class="card">
-    <div class="card-header"><div class="card-title">Wasabi B2 Configuration</div></div>
+    <div class="card-header"><div class="card-title">Attachments Offload</div><div class="card-desc">Offload ticket attachments to Wasabi bucket</div></div>
     <div class="card-body">
-      <div class="form-group"><label class="form-label">Endpoint</label><input type="text" class="form-control" name="WASABI_ENDPOINT" value="{{ settings.get('WASABI_ENDPOINT','') }}" placeholder="s3.wasabisys.com"></div>
-      <div class="form-group"><label class="form-label">Access Key</label><input type="text" class="form-control" name="WASABI_ACCESS_KEY" value="{{ settings.get('WASABI_ACCESS_KEY','') }}"></div>
-      <div class="form-group"><label class="form-label">Secret Key</label><input type="password" class="form-control" name="WASABI_SECRET_KEY" value="{{ settings.get('WASABI_SECRET_KEY','') }}"></div>
-      <div class="form-group"><label class="form-label">Bucket Name</label><input type="text" class="form-control" name="WASABI_BUCKET_NAME" value="{{ settings.get('WASABI_BUCKET_NAME','') }}"></div>
-      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('wasabi')">Test Connection</button>
-      <div id="wasabi-test-result" class="mt-2 text-sm"></div>
+      <div class="form-group">
+        <label class="form-label">Enabled</label>
+        <select class="form-select" name="ATTACH_OFFLOAD_ENABLED">
+          <option value="true" {% if settings.get('ATTACH_OFFLOAD_ENABLED','true') in ('true','1','yes','on') %}selected{% endif %}>Yes</option>
+          <option value="false" {% if settings.get('ATTACH_OFFLOAD_ENABLED','true') in ('false','0','no','off') %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">S3 Endpoint</label><input type="text" class="form-control" name="ATTACH_OFFLOAD_ENDPOINT" value="{{ settings.get('ATTACH_OFFLOAD_ENDPOINT','s3.wasabisys.com') }}" placeholder="s3.wasabisys.com"></div>
+      <div class="form-group"><label class="form-label">Bucket Name</label><input type="text" class="form-control" name="ATTACH_OFFLOAD_BUCKET" value="{{ settings.get('ATTACH_OFFLOAD_BUCKET','supportmailboxattachments') }}" placeholder="supportmailboxattachments"></div>
+      <div class="form-group"><label class="form-label">Interval (minutes)</label><input type="number" class="form-control" name="ATTACH_OFFLOAD_INTERVAL_MINUTES" value="{{ settings.get('ATTACH_OFFLOAD_INTERVAL_MINUTES','60') }}" min="5" placeholder="60"><small style="color:var(--muted-foreground)">60 = once per hour</small></div>
+      <div class="form-group"><label class="form-label">Daily Limit</label><input type="number" class="form-control" name="ATTACH_OFFLOAD_DAILY_LIMIT" value="{{ settings.get('ATTACH_OFFLOAD_DAILY_LIMIT','0') }}" min="0" placeholder="0"><small style="color:var(--muted-foreground)">0 = unlimited</small></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('attach_offload')">Test Connection</button>
+      <div id="attach_offload-test-result" class="mt-2 text-sm"></div>
+    </div>
+  </div>
+
+  <!-- Closed-Ticket Backup -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Closed-Ticket Backup</div><div class="card-desc">Backup closed tickets to dedicated Wasabi bucket</div></div>
+    <div class="card-body">
+      <div class="form-group">
+        <label class="form-label">Enabled</label>
+        <select class="form-select" name="TICKET_BACKUP_ENABLED">
+          <option value="true" {% if settings.get('TICKET_BACKUP_ENABLED','true') in ('true','1','yes','on') %}selected{% endif %}>Yes</option>
+          <option value="false" {% if settings.get('TICKET_BACKUP_ENABLED','true') in ('false','0','no','off') %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">S3 Endpoint</label><input type="text" class="form-control" name="TICKET_BACKUP_ENDPOINT" value="{{ settings.get('TICKET_BACKUP_ENDPOINT','s3.eu-central-1.wasabisys.com') }}" placeholder="s3.eu-central-1.wasabisys.com"></div>
+      <div class="form-group"><label class="form-label">Bucket Name</label><input type="text" class="form-control" name="TICKET_BACKUP_BUCKET" value="{{ settings.get('TICKET_BACKUP_BUCKET','supportmailboxtickets') }}" placeholder="supportmailboxtickets"></div>
+      <div class="form-group"><label class="form-label">Interval (minutes)</label><input type="number" class="form-control" name="TICKET_BACKUP_INTERVAL_MINUTES" value="{{ settings.get('TICKET_BACKUP_INTERVAL_MINUTES','1440') }}" min="5" placeholder="1440"><small style="color:var(--muted-foreground)">1440 = once per day</small></div>
+      <div class="form-group"><label class="form-label">Daily Limit</label><input type="number" class="form-control" name="TICKET_BACKUP_DAILY_LIMIT" value="{{ settings.get('TICKET_BACKUP_DAILY_LIMIT','0') }}" min="0" placeholder="0"><small style="color:var(--muted-foreground)">0 = unlimited</small></div>
+      <button type="button" class="btn btn-outline btn-sm" onclick="testConnection('ticket_backup')">Test Connection</button>
+      <div id="ticket_backup-test-result" class="mt-2 text-sm"></div>
     </div>
   </div>
 
@@ -80,14 +107,39 @@
     </div>
   </div>
 
-  <!-- Scheduler -->
+  <!-- Attachment Offload Scheduler -->
   <div class="card">
-    <div class="card-header"><div class="card-title">Scheduler</div></div>
+    <div class="card-header"><div class="card-title">Attachment Offload Scheduler</div></div>
     <div class="card-body">
       <div class="form-group"><label class="form-label">Offload Time (HH:MM, server time)</label><input type="text" class="form-control" name="OFFLOAD_TIME" value="{{ settings.get('OFFLOAD_TIME','00:00') }}" placeholder="00:00"></div>
-      <div class="form-group"><label class="form-label">Recheck Time (HH:MM)</label><input type="text" class="form-control" name="RECHECK_TIME" value="{{ settings.get('RECHECK_TIME','01:00') }}" placeholder="01:00"></div>
-      <div class="form-group"><label class="form-label">Storage Report Interval (hours)</label><input type="number" class="form-control" name="STORAGE_REPORT_INTERVAL" value="{{ settings.get('STORAGE_REPORT_INTERVAL','6') }}" min="1" max="168"></div>
       <div class="form-group"><label class="form-label">Max Attachments per Run</label><input type="number" class="form-control" name="MAX_ATTACHMENTS_PER_RUN" value="{{ settings.get('MAX_ATTACHMENTS_PER_RUN','') }}" placeholder="unlimited"></div>
+    </div>
+  </div>
+
+  <!-- Tickets Backup Scheduler -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Tickets Backup Scheduler</div></div>
+    <div class="card-body">
+      <div class="form-group"><label class="form-label">Backup Time (HH:MM, server time)</label><input type="text" class="form-control" name="TICKET_BACKUP_TIME" value="{{ settings.get('TICKET_BACKUP_TIME','01:00') }}" placeholder="01:00"></div>
+      <div class="form-group"><label class="form-label">Max Tickets per Run</label><input type="number" class="form-control" name="TICKET_BACKUP_MAX_PER_RUN" value="{{ settings.get('TICKET_BACKUP_MAX_PER_RUN','') }}" placeholder="unlimited"></div>
+    </div>
+  </div>
+
+  <!-- Ticket Backup -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Closed-Ticket Backup</div><div class="card-desc">Backup closed tickets to dedicated Wasabi bucket</div></div>
+    <div class="card-body">
+      <div class="form-group">
+        <label class="form-label">Enabled</label>
+        <select class="form-select" name="TICKET_BACKUP_ENABLED">
+          <option value="true" {% if settings.get('TICKET_BACKUP_ENABLED','true') in ('true','1','yes','on') %}selected{% endif %}>Yes</option>
+          <option value="false" {% if settings.get('TICKET_BACKUP_ENABLED','true') in ('false','0','no','off') %}selected{% endif %}>No</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">S3 Endpoint</label><input type="text" class="form-control" name="TICKET_BACKUP_ENDPOINT" value="{{ settings.get('TICKET_BACKUP_ENDPOINT','s3.eu-central-1.wasabisys.com') }}" placeholder="s3.eu-central-1.wasabisys.com"></div>
+      <div class="form-group"><label class="form-label">Bucket Name</label><input type="text" class="form-control" name="TICKET_BACKUP_BUCKET" value="{{ settings.get('TICKET_BACKUP_BUCKET','supportmailboxtickets') }}" placeholder="supportmailboxtickets"></div>
+      <div class="form-group"><label class="form-label">Interval (minutes)</label><input type="number" class="form-control" name="TICKET_BACKUP_INTERVAL_MINUTES" value="{{ settings.get('TICKET_BACKUP_INTERVAL_MINUTES','1440') }}" min="5" placeholder="1440"><small style="color:var(--muted-foreground)">1440 = once per day</small></div>
+      <div class="form-group"><label class="form-label">Daily Limit</label><input type="number" class="form-control" name="TICKET_BACKUP_DAILY_LIMIT" value="{{ settings.get('TICKET_BACKUP_DAILY_LIMIT','0') }}" min="0" placeholder="0"><small style="color:var(--muted-foreground)">0 = unlimited</small></div>
     </div>
   </div>
 

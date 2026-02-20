@@ -2,20 +2,7 @@
 {% block title %}Dashboard — z2w{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 {% block page_sub %}Zendesk to Wasabi offload overview{% endblock %}
-{% block topbar_actions %}
-<button class="btn btn-primary btn-sm" onclick="runNow()">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-  Run Now
-</button>
-<button class="btn btn-secondary btn-sm" onclick="openModal('backupModal')">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-  Backup
-</button>
-<button class="btn btn-outline btn-sm" onclick="openModal('recheckModal')">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-  Recheck All
-</button>
-{% endblock %}
+{% block topbar_actions %}{% endblock %}
 
 {% block content %}
 <div class="stat-grid">
@@ -33,16 +20,39 @@
     </div>
     <div class="stat-value">{{ total_attachments }}</div>
   </div>
-  <div class="stat-card" id="schedulerCard">
+  <div class="stat-card" id="offloadSchedulerCard">
     <div class="stat-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      Scheduler
+      Attachment Offload Scheduler
     </div>
-    <div class="stat-value" style="font-size:16px" id="scheduler-status">Loading…</div>
-    <div class="stat-sub" id="next-run"></div>
+    <div class="stat-value" style="font-size:16px" id="offload-scheduler-status">Loading…</div>
+    <div class="stat-sub" id="offload-next-run"></div>
     <div style="margin-top:8px;display:flex;gap:6px">
       <button class="btn btn-success btn-xs" onclick="startScheduler()">Start</button>
       <button class="btn btn-destructive btn-xs" onclick="stopScheduler()">Stop</button>
+    </div>
+  </div>
+  <div class="stat-card" id="backupSchedulerCard">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Tickets Backup Scheduler
+    </div>
+    <div class="stat-value" style="font-size:16px" id="backup-scheduler-status">Loading…</div>
+    <div class="stat-sub" id="backup-next-run"></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-success btn-xs" onclick="startBackupScheduler()">Start</button>
+      <button class="btn btn-destructive btn-xs" onclick="stopBackupScheduler()">Stop</button>
+    </div>
+  </div>
+  <div class="stat-card info" id="ticketsBackupCard">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Tickets Backup
+    </div>
+    <div class="stat-value" id="tickets-backup-count">Loading…</div>
+    <div class="stat-sub" id="tickets-backup-last-run">Last run: Loading…</div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-primary btn-xs" onclick="runBackupNow()">Run Backup Now</button>
     </div>
   </div>
   <div class="stat-card">

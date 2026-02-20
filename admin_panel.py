@@ -4,7 +4,7 @@ Admin panel for managing settings and monitoring
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from datetime import datetime
 from sqlalchemy import func, or_, cast, String, asc, desc
-from database import get_db, Setting, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot
+from database import get_db, Setting, ProcessedTicket, OffloadLog, ZendeskTicketCache, ZendeskStorageSnapshot, TicketBackupItem, TicketBackupRun
 from scheduler import OffloadScheduler
 from offloader import AttachmentOffloader
 from email_reporter import EmailReporter
@@ -574,6 +574,11 @@ def settings():
             'RECHECK_HOUR': os.getenv('RECHECK_HOUR', '2'),
             'CONTINUOUS_OFFLOAD_INTERVAL': os.getenv('CONTINUOUS_OFFLOAD_INTERVAL', '5'),
             'STORAGE_REPORT_INTERVAL': os.getenv('STORAGE_REPORT_INTERVAL', '60'),
+            'TICKET_BACKUP_ENABLED': os.getenv('TICKET_BACKUP_ENABLED', 'true'),
+            'TICKET_BACKUP_ENDPOINT': os.getenv('TICKET_BACKUP_ENDPOINT', 's3.eu-central-1.wasabisys.com'),
+            'TICKET_BACKUP_BUCKET': os.getenv('TICKET_BACKUP_BUCKET', 'supportmailboxtickets'),
+            'TICKET_BACKUP_INTERVAL_MINUTES': os.getenv('TICKET_BACKUP_INTERVAL_MINUTES', '1440'),
+            'TICKET_BACKUP_DAILY_LIMIT': os.getenv('TICKET_BACKUP_DAILY_LIMIT', '0'),
         }
         
         # Merge with database settings (database takes priority)
@@ -921,6 +926,159 @@ def storage_report_refresh():
         t = threading.Thread(target=sched.storage_snapshot_job, daemon=True, name='storage-snap-manual')
         t.start()
         return jsonify({'success': True, 'message': 'Storage snapshot refresh started in background.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ── Closed-Ticket Backup ─────────────────────────────────────────────
+@app.route('/ticket_backup')
+@login_required
+def ticket_backup():
+    """Closed-ticket backup status page with search/sort/filter."""
+    db = get_db()
+    try:
+        page = request.args.get('page', 1, type=int)
+        search_query = (request.args.get('q', '') or '').strip()
+        status_filter = (request.args.get('status', '') or '').strip()
+        sort_by = request.args.get('sort', 'ticket_id')
+        sort_order = request.args.get('order', 'desc')
+        per_page = 50
+
+        from sqlalchemy import func as sqlfunc
+
+        sort_map = {
+            'ticket_id':     TicketBackupItem.ticket_id,
+            'closed_at':     TicketBackupItem.closed_at,
+            'backup_status': TicketBackupItem.backup_status,
+            'last_backup_at': TicketBackupItem.last_backup_at,
+            'files_count':   TicketBackupItem.files_count,
+            'total_bytes':   TicketBackupItem.total_bytes,
+        }
+        sort_col = sort_map.get(sort_by, TicketBackupItem.ticket_id)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        base_q = db.query(TicketBackupItem)
+        if search_query:
+            lp = f"%{search_query}%"
+            base_q = base_q.filter(
+                or_(
+                    cast(TicketBackupItem.ticket_id, String).like(lp),
+                    TicketBackupItem.backup_status.like(lp),
+                    TicketBackupItem.s3_prefix.like(lp),
+                    TicketBackupItem.last_error.like(lp),
+                )
+            )
+        if status_filter:
+            base_q = base_q.filter(TicketBackupItem.backup_status == status_filter)
+
+        # Counts per status
+        status_counts = {}
+        for row in db.query(TicketBackupItem.backup_status, sqlfunc.count(TicketBackupItem.id))\
+                      .group_by(TicketBackupItem.backup_status).all():
+            status_counts[row[0] or ''] = row[1]
+
+        total_items = sum(status_counts.values())
+        success_count = status_counts.get('success', 0)
+        failed_count = status_counts.get('failed', 0)
+        pending_count = status_counts.get('pending', 0)
+        skipped_count = status_counts.get('skipped', 0)
+
+        total_bytes = db.query(sqlfunc.sum(TicketBackupItem.total_bytes)).filter(
+            TicketBackupItem.backup_status == 'success'
+        ).scalar() or 0
+        total_files = db.query(sqlfunc.sum(TicketBackupItem.files_count)).filter(
+            TicketBackupItem.backup_status == 'success'
+        ).scalar() or 0
+
+        # Closed tickets not yet tracked
+        closed_cache_count = db.query(sqlfunc.count(ZendeskTicketCache.ticket_id)).filter(
+            ZendeskTicketCache.status == 'closed'
+        ).scalar() or 0
+
+        # Paginate filtered query
+        total_rows = base_q.count()
+        rows = base_q.order_by(order_fn(sort_col)).offset((page - 1) * per_page).limit(per_page).all()
+
+        # Last run info
+        last_run = db.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
+
+        items_data = []
+        for item in rows:
+            items_data.append({
+                'ticket_id': item.ticket_id,
+                'closed_at': item.closed_at,
+                'last_backup_at': item.last_backup_at,
+                'backup_status': item.backup_status or 'pending',
+                'files_count': item.files_count or 0,
+                'total_bytes': item.total_bytes or 0,
+                's3_prefix': item.s3_prefix or '',
+                'last_error': item.last_error or '',
+            })
+
+        class Pagination:
+            def __init__(self, page, per_page, total):
+                self.page = page; self.per_page = per_page; self.total = total
+                self.pages = max(1, (total + per_page - 1) // per_page)
+                self.has_prev = page > 1
+                self.has_next = page < self.pages
+                self.prev_num = page - 1 if self.has_prev else None
+                self.next_num = page + 1 if self.has_next else None
+            def iter_pages(self, left_edge=2, right_edge=2, left_current=2, right_current=2):
+                for num in range(1, self.pages + 1):
+                    if (num <= left_edge or
+                            (num > self.page - left_current - 1 and num < self.page + right_current) or
+                            num > self.pages - right_edge):
+                        yield num
+
+        # Zendesk subdomain for ticket links
+        from config import ZENDESK_SUBDOMAIN
+        sub_row = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
+        subdomain = (sub_row.value if sub_row else None) or ZENDESK_SUBDOMAIN or 'app'
+
+        return render_template(
+            'ticket_backup.html',
+            items=items_data,
+            pagination=Pagination(page, per_page, total_rows),
+            q=search_query,
+            sort=sort_by,
+            order=sort_order,
+            status_filter=status_filter,
+            status_counts=status_counts,
+            total_items=total_items,
+            success_count=success_count,
+            failed_count=failed_count,
+            pending_count=pending_count,
+            skipped_count=skipped_count,
+            total_bytes=int(total_bytes),
+            total_files=int(total_files),
+            closed_cache_count=closed_cache_count,
+            last_run=last_run,
+            subdomain=subdomain,
+        )
+    finally:
+        db.close()
+
+
+@app.route('/api/ticket_backup_now', methods=['POST'])
+@login_required
+def ticket_backup_now():
+    """Manually trigger a closed-ticket backup run."""
+    try:
+        sched = init_scheduler()
+        sched.run_ticket_backup_now()
+        return jsonify({'success': True, 'message': 'Closed-ticket backup started in background.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/ticket_backup_status')
+@login_required
+def ticket_backup_status():
+    """Return current ticket-backup job status."""
+    try:
+        sched = init_scheduler()
+        status = sched.get_ticket_backup_status()
+        return jsonify({'success': True, **status})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

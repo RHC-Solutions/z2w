@@ -10,6 +10,7 @@ from email_reporter import EmailReporter
 from telegram_reporter import TelegramReporter
 from slack_reporter import SlackReporter
 from backup_manager import BackupManager
+from ticket_backup_manager import TicketBackupManager
 from database import get_db, OffloadLog, ZendeskStorageSnapshot, Setting
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
 import logging
@@ -40,6 +41,7 @@ class OffloadScheduler:
         self.telegram_reporter = TelegramReporter()
         self.slack_reporter = SlackReporter()
         self.backup_manager = BackupManager()
+        self.ticket_backup_manager = TicketBackupManager()
         
         # Add a lock to prevent overlapping runs
         self._job_lock = threading.Lock()
@@ -48,6 +50,10 @@ class OffloadScheduler:
         self._backup_running = False
         self._continuous_lock = threading.Lock()
         self._continuous_running = False
+        self._ticket_backup_lock = threading.Lock()
+        self._ticket_backup_running = False
+        self._ticket_backup_started_at = None
+        self._ticket_backup_last_summary = None
         self._storage_lock = threading.Lock()
         self._storage_running = False
 
@@ -701,7 +707,22 @@ The backup file is being sent to you now...
                 next_run_time=datetime.now() + timedelta(minutes=3)  # stagger: 3min after boot (between offload cycles)
             )
             logger.info(f"Scheduled storage snapshot every {STORAGE_REPORT_INTERVAL} minute(s)")
-            
+
+            # ── Closed-ticket backup (separate job) ─────────────────────
+            from config import TICKET_BACKUP_ENABLED, TICKET_BACKUP_INTERVAL_MINUTES
+            if TICKET_BACKUP_ENABLED:
+                self.scheduler.add_job(
+                    self._ticket_backup_background,
+                    trigger=IntervalTrigger(minutes=TICKET_BACKUP_INTERVAL_MINUTES),
+                    id='closed_ticket_backup',
+                    name=f'Closed Ticket Backup (every {TICKET_BACKUP_INTERVAL_MINUTES}m)',
+                    replace_existing=True,
+                    next_run_time=datetime.now() + timedelta(minutes=5),  # stagger 5min
+                )
+                logger.info(f"Scheduled closed-ticket backup every {TICKET_BACKUP_INTERVAL_MINUTES} minute(s)")
+            else:
+                logger.info("Closed-ticket backup is DISABLED")
+
             self.scheduler.start()
             
             # Log all scheduled jobs
@@ -837,6 +858,102 @@ The backup file is being sent to you now...
             "running": running,
             "started_at": started_at.isoformat() if started_at else None,
             "progress": progress,
+            "summary": summary,
+            "next_scheduled_run": next_run,
+        }
+
+    # ── Closed-ticket backup ───────────────────────────────────────────
+    def ticket_backup_job(self):
+        """Run the closed-ticket backup and send summary to Telegram/Slack."""
+        if self._ticket_backup_running:
+            logger.debug("[TicketBackup] Previous run still active — skipping")
+            return
+        acquired = self._ticket_backup_lock.acquire(blocking=False)
+        if not acquired:
+            return
+        try:
+            self._ticket_backup_running = True
+            self._ticket_backup_started_at = datetime.utcnow()
+            logger.info("[TicketBackup] Starting closed-ticket backup job")
+
+            from config import TICKET_BACKUP_DAILY_LIMIT
+            limit = TICKET_BACKUP_DAILY_LIMIT or 0
+
+            stats = self.ticket_backup_manager.backup_closed_tickets(limit=limit)
+            self._ticket_backup_last_summary = stats
+
+            # ── Build summary message ──────────────────────────
+            scanned = stats.get('tickets_scanned', 0)
+            backed = stats.get('tickets_backed_up', 0)
+            files = stats.get('files_uploaded', 0)
+            bts = stats.get('bytes_uploaded', 0)
+            errs = stats.get('errors', [])
+            mb = bts / 1048576
+
+            emoji = '✅' if not errs else '⚠️'
+            msg = (
+                f"{emoji} <b>Closed-Ticket Backup</b>\n\n"
+                f"📋 Scanned: <b>{scanned}</b>\n"
+                f"💾 Backed up: <b>{backed}</b>\n"
+                f"📎 Files uploaded: <b>{files}</b>\n"
+                f"📦 Size: <b>{mb:.1f} MB</b>\n"
+            )
+            if errs:
+                msg += f"❌ Errors: <b>{len(errs)}</b>\n"
+                for e in errs[:5]:
+                    msg += f"  • {e}\n"
+
+            try:
+                self.telegram_reporter.send_message(msg.strip())
+            except Exception:
+                pass
+            try:
+                slack_text = msg.replace('<b>', '*').replace('</b>', '*').replace('<br>', '\n')
+                import re as _re
+                slack_text = _re.sub(r'<[^>]+>', '', slack_text)
+                self.slack_reporter.send_message(slack_text.strip())
+            except Exception:
+                pass
+
+            logger.info(
+                f"[TicketBackup] Completed — scanned={scanned}, backed_up={backed}, "
+                f"files={files}, bytes={bts}, errors={len(errs)}"
+            )
+        except Exception as e:
+            logger.error(f"[TicketBackup] Error: {e}", exc_info=True)
+            try:
+                self.telegram_reporter.send_message(f"❌ <b>Closed-Ticket Backup Failed</b>\n\n{e}")
+            except Exception:
+                pass
+        finally:
+            self._ticket_backup_running = False
+            self._ticket_backup_lock.release()
+
+    def _ticket_backup_background(self):
+        """APScheduler entry — run in daemon thread so scheduler pool isn't blocked."""
+        t = threading.Thread(target=self.ticket_backup_job, daemon=True, name='ticket-backup')
+        t.start()
+
+    def run_ticket_backup_now(self):
+        """Manually trigger the closed-ticket backup (non-blocking)."""
+        self._ticket_backup_background()
+
+    def get_ticket_backup_status(self):
+        """Return current ticket-backup job status for the API."""
+        running = getattr(self, '_ticket_backup_running', False)
+        started_at = getattr(self, '_ticket_backup_started_at', None)
+        summary = getattr(self, '_ticket_backup_last_summary', None)
+        next_run = None
+        try:
+            if self.scheduler.running:
+                job = self.scheduler.get_job('closed_ticket_backup')
+                if job and job.next_run_time:
+                    next_run = job.next_run_time.isoformat()
+        except Exception:
+            pass
+        return {
+            "running": running,
+            "started_at": started_at.isoformat() if started_at else None,
             "summary": summary,
             "next_scheduled_run": next_run,
         }

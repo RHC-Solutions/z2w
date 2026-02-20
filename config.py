@@ -47,12 +47,26 @@ RECHECK_HOUR = int(os.getenv("RECHECK_HOUR", "2"))
 CONTINUOUS_OFFLOAD_INTERVAL = int(os.getenv("CONTINUOUS_OFFLOAD_INTERVAL", "5"))  # minutes
 STORAGE_REPORT_INTERVAL = int(os.getenv("STORAGE_REPORT_INTERVAL", "60"))  # minutes between storage report refreshes
 
+ATTACH_OFFLOAD_ENABLED = os.getenv("ATTACH_OFFLOAD_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+ATTACH_OFFLOAD_INTERVAL_MINUTES = int(os.getenv("ATTACH_OFFLOAD_INTERVAL_MINUTES", "60"))
+ATTACH_OFFLOAD_ENDPOINT = os.getenv("ATTACH_OFFLOAD_ENDPOINT", "s3.wasabisys.com")
+ATTACH_OFFLOAD_BUCKET = os.getenv("ATTACH_OFFLOAD_BUCKET", "supportmailboxattachments")
+ATTACH_OFFLOAD_DAILY_LIMIT = int(os.getenv("ATTACH_OFFLOAD_DAILY_LIMIT", "0"))  # 0 = no limit
+
 # Closed Ticket Backup Configuration (separate scheduler/job)
 TICKET_BACKUP_ENABLED = os.getenv("TICKET_BACKUP_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 TICKET_BACKUP_INTERVAL_MINUTES = int(os.getenv("TICKET_BACKUP_INTERVAL_MINUTES", "1440"))
 TICKET_BACKUP_ENDPOINT = os.getenv("TICKET_BACKUP_ENDPOINT", "s3.eu-central-1.wasabisys.com")
 TICKET_BACKUP_BUCKET = os.getenv("TICKET_BACKUP_BUCKET", "supportmailboxtickets")
 TICKET_BACKUP_DAILY_LIMIT = int(os.getenv("TICKET_BACKUP_DAILY_LIMIT", "0"))  # 0 = no limit
+
+# Tickets Backup Scheduler
+TICKET_BACKUP_TIME = os.getenv("TICKET_BACKUP_TIME", "01:00")
+TICKET_BACKUP_MAX_PER_RUN = int(os.getenv("TICKET_BACKUP_MAX_PER_RUN", "0"))  # 0 = unlimited
+
+# Attachment Offload Scheduler
+OFFLOAD_TIME = os.getenv("OFFLOAD_TIME", "00:00")
+MAX_ATTACHMENTS_PER_RUN = int(os.getenv("MAX_ATTACHMENTS_PER_RUN", "0"))  # 0 = unlimited
 
 # Admin Panel
 ADMIN_PANEL_PORT = int(os.getenv("ADMIN_PANEL_PORT", "5000"))
