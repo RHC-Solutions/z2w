@@ -362,9 +362,11 @@
       background: oklch(0.42 0.008 265); flex-shrink: 0;
     }
     .dot-active { background: oklch(0.65 0.17 145); }
+    .nav-tenant-icon { flex-shrink: 0; color: var(--primary); }
+    .nav-tenant-icon svg { display: block; }
     .nav-tenant-name {
-      flex: 1; font-size: 12px; font-weight: 500;
-      color: var(--sidebar-muted); overflow: hidden;
+      flex: 1; font-size: 13px; font-weight: 650;
+      color: var(--sidebar-foreground); overflow: hidden;
       text-overflow: ellipsis; white-space: nowrap;
     }
     .nav-tenant-chevron {
@@ -418,11 +420,18 @@
       {%- set _cur_slug = g.tenant_slug if g and g.tenant_slug else '' %}
       {% if g and g.all_tenants %}
         {% for _t in g.all_tenants %}
-          <div class="nav-tenant-group {% if _t.slug == _cur_slug %}expanded{% endif %}"
+          <div class="nav-tenant-group expanded"
                id="ntg-{{ _t.slug }}">
             <div class="nav-tenant-header" onclick="toggleTenantNav('{{ _t.slug }}')">
-              <span class="nav-tenant-dot {% if _t.is_active %}dot-active{% endif %}"></span>
-              <span class="nav-tenant-name">{{ (_t.display_name or _t.slug)|truncate(18, True, '…') }}</span>
+              <span class="nav-tenant-icon">
+                <!-- Zendesk-style headset / support icon -->
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
+                  <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+                </svg>
+              </span>
+              <span class="nav-tenant-name">{{ (_t.display_name or _t.slug)|truncate(20, True, '…') }}</span>
               <svg class="nav-tenant-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
             <div class="nav-tenant-children">
