@@ -460,6 +460,11 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg>
                 <span>Bucket Browser</span>
               </a>
+                <a href="{{ url_for('tenant_explorer', slug=_t.slug) }}"
+                  class="nav-item nav-sub {% if request.endpoint in ('tenant_explorer','explorer_app') and _t.slug == _cur_slug %}active{% endif %}">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                 <span>Zendesk Explorer</span>
+                </a>
               <a href="{{ url_for('tenant_ticket_backup', slug=_t.slug) }}"
                  class="nav-item nav-sub {% if request.endpoint in ('tenant_ticket_backup','ticket_backup') and _t.slug == _cur_slug %}active{% endif %}">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -475,13 +480,8 @@
         {% endfor %}
       {% endif %}
 
-      <!-- ── Explorer & System ──────────────────────────── -->
+      <!-- ── System ─────────────────────────────────────── -->
       <div class="nav-divider"></div>
-      <div class="nav-section">Explorer</div>
-      <a href="{{ url_for('explorer_app') }}" class="nav-item {% if request.endpoint == 'explorer_app' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <span>Zendesk Explorer</span>
-      </a>
       <div class="nav-section">System</div>
       <a href="{{ url_for('tools') }}" class="nav-item {% if request.endpoint == 'tools' %}active{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>

@@ -795,6 +795,16 @@ def tenant_storage(slug):
     return storage_report()
 
 
+@app.route('/t/<slug>/explorer')
+@login_required
+def tenant_explorer(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return explorer_app()
+
+
 @app.route('/t/<slug>/logs')
 @login_required
 def tenant_logs(slug):
