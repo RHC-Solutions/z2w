@@ -80,6 +80,9 @@ werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.WARNING)
 werkzeug_logger.addFilter(StaticFileFilter())
 
+# Module-level logger (used throughout this file)
+logger = logging.getLogger('zendesk_offloader')
+
 # ── Tenant context middleware ─────────────────────────────────────────────────
 from flask import g as _flask_g
 
@@ -622,7 +625,27 @@ def wizard_test_offload():
         uploaded = []
         for att in attachments[:2]:  # test first 2 only
             key = f'__wizard_test__/{ticket_id}/{att["file_name"]}'
-            ws.upload_bytes(att['content_url'], key)
+            # Download the attachment bytes then upload to Wasabi
+            import urllib.request as _urlreq
+            import base64 as _b64
+            req = _urlreq.Request(att['content_url'])
+            creds = _b64.b64encode(
+                f'{cfg.zendesk_email}/token:{cfg.zendesk_api_token}'.encode()
+            ).decode()
+            req.add_header('Authorization', f'Basic {creds}')
+            with _urlreq.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+            ws.s3_client.put_object(
+                Bucket=ws.bucket_name,
+                Key=key,
+                Body=raw,
+                ContentType=att.get('content_type', 'application/octet-stream'),
+            )
+            # Clean up test file
+            try:
+                ws.s3_client.delete_object(Bucket=ws.bucket_name, Key=key)
+            except Exception:
+                pass
             uploaded.append(att['file_name'])
         return jsonify({'success': True, 'message': f'Uploaded {len(uploaded)} attachment(s) ✓: {", ".join(uploaded)}'})
     except Exception as exc:
@@ -2681,8 +2704,8 @@ def _reset_admin_password_internal():
         
         # If not in database, reload config and get from environment
         if not telegram_bot_token or not telegram_chat_id:
+            from config import reload_config, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
             reload_config()
-            from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
             telegram_bot_token = telegram_bot_token or TELEGRAM_BOT_TOKEN
             telegram_chat_id = telegram_chat_id or TELEGRAM_CHAT_ID
         
