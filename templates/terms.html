@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Terms &amp; Conditions — Z2W{% endblock %}
+{% block page_title %}Terms &amp; Conditions{% endblock %}
+{% block page_sub %}Last updated: February 2026{% endblock %}
+
+{% block content %}
+<div style="max-width:760px;margin:0 auto;">
+  <div class="card mb-4">
+    <div class="card-body" style="line-height:1.75;color:var(--muted-foreground);font-size:13.5px;">
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">1. Acceptance of Terms</h2>
+      <p style="margin-bottom:16px;">
+        By accessing or using the Z2W application ("Service") operated by RHC Solutions ("we", "us", or "our"),
+        you agree to be bound by these Terms &amp; Conditions. If you do not agree, please discontinue use immediately.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">2. Description of Service</h2>
+      <p style="margin-bottom:16px;">
+        Z2W is an internal tool that facilitates the offloading of Zendesk ticket attachments and the backup of
+        closed tickets to Wasabi S3-compatible object storage. The Service is intended solely for authorised
+        personnel of RHC Solutions and its clients.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">3. Authorised Use</h2>
+      <p style="margin-bottom:16px;">
+        Access to the Service is restricted to authenticated users with valid credentials. You must not share
+        your login credentials, attempt to gain unauthorised access, reverse-engineer the application, or use
+        the Service for any purpose other than its intended function.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">4. Data &amp; Storage</h2>
+      <p style="margin-bottom:16px;">
+        Data processed by the Service (including Zendesk ticket metadata and attachments) is stored in
+        Wasabi object storage buckets configured by your tenant administrator. RHC Solutions is not responsible
+        for data loss resulting from misconfiguration of storage credentials or third-party service outages.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">5. Intellectual Property</h2>
+      <p style="margin-bottom:16px;">
+        All software, designs, and documentation comprising the Z2W application are the intellectual property
+        of RHC Solutions. No part may be copied, modified, distributed, or sublicensed without prior written consent.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">6. Limitation of Liability</h2>
+      <p style="margin-bottom:16px;">
+        To the maximum extent permitted by applicable law, RHC Solutions shall not be liable for any indirect,
+        incidental, special, consequential, or punitive damages arising from your use of or inability to use
+        the Service, including but not limited to data loss or business interruption.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">7. Modifications</h2>
+      <p style="margin-bottom:16px;">
+        We reserve the right to update these Terms at any time. Continued use of the Service after changes
+        are posted constitutes acceptance of the revised Terms.
+      </p>
+
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--foreground);margin-bottom:6px;">8. Governing Law</h2>
+      <p style="margin-bottom:0;">
+        These Terms are governed by the laws of Ireland. Any disputes arising shall be subject to the
+        exclusive jurisdiction of the courts of Ireland.
+      </p>
+
+    </div>
+  </div>
+  <p style="font-size:12px;color:var(--muted-foreground);text-align:center;padding-bottom:8px;">
+    &copy; 2026 RHC Solutions. All rights reserved. &mdash;
+    <a href="{{ url_for('privacy') }}" style="color:inherit;">Privacy Policy</a> &middot;
+    <a href="{{ url_for('cookies') }}" style="color:inherit;">Cookies Policy</a>
+  </p>
+</div>
+{% endblock %}

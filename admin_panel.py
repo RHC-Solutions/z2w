@@ -2231,6 +2231,11 @@ def cookies():
     """Cookie Policy page"""
     return render_template('cookies.html')
 
+@app.route('/terms')
+def terms():
+    """Terms & Conditions page"""
+    return render_template('terms.html')
+
 @app.route('/debug/login-info')
 def debug_login_info():
     """Debug endpoint to check expected login credentials (temporary - remove in production)"""
