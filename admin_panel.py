@@ -128,6 +128,15 @@ def _inject_tenant_context():
     except Exception:
         g.all_tenants = []
 
+@app.after_request
+def _no_cache_html(response):
+    """Prevent browsers from caching HTML pages so template changes show immediately."""
+    if 'text/html' in response.content_type:
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
 
 def init_scheduler():
     """Initialize scheduler (singleton)"""
