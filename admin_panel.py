@@ -475,9 +475,12 @@ def tenants_overview():
             'tickets_processed': 0,
             'tickets_backed_up': 0,
             'total_attachments': 0,
+            'total_inlines_offloaded': 0,
             'total_bytes_offloaded': 0,
             'total_runs_today': 0,
+            'total_runs': 0,
             'last_offload': None,
+            'last_offload_ago': None,
             'last_backup': None,
             'last_backup_run': None,
             'errors_today': 0,
@@ -504,11 +507,26 @@ def tenants_overview():
             card['total_attachments'] = int(att_row[0] or 0)
             card['total_bytes_offloaded'] = int(att_row[1] or 0)
 
+            # Inline images offloaded (from offload_logs sum)
+            inlines_row = tdb.query(sqlfunc.sum(OffloadLog.inlines_uploaded)).scalar()
+            card['total_inlines_offloaded'] = int(inlines_row or 0)
+
+            # Total runs ever
+            card['total_runs'] = tdb.query(sqlfunc.count(OffloadLog.id)).scalar() or 0
+
             # Offload runs today + last offload
             last_log = tdb.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
             if last_log:
                 card['last_offload'] = last_log.run_date
                 card['errors_today'] = last_log.errors_count or 0
+                diff = now - last_log.run_date
+                mins = int(diff.total_seconds() // 60)
+                if mins < 60:
+                    card['last_offload_ago'] = f'{mins}m ago'
+                elif mins < 1440:
+                    card['last_offload_ago'] = f'{mins // 60}h ago'
+                else:
+                    card['last_offload_ago'] = f'{mins // 1440}d ago'
             today_runs = tdb.query(sqlfunc.count(OffloadLog.id))\
                 .filter(OffloadLog.run_date >= today_start).scalar() or 0
             card['total_runs_today'] = today_runs
@@ -539,7 +557,20 @@ def tenants_overview():
             pass
         cards.append(card)
 
-    return render_template('tenants.html', cards=cards)
+    # Fleet-level summary for the overview header
+    fleet = {
+        'total': len(cards),
+        'active': sum(1 for c in cards if c['is_active']),
+        'configured': sum(1 for c in cards if c['configured']),
+        'tickets_processed': sum(c['tickets_processed'] for c in cards),
+        'total_attachments': sum(c['total_attachments'] for c in cards),
+        'total_inlines': sum(c['total_inlines_offloaded'] for c in cards),
+        'total_bytes': sum(c['total_bytes_offloaded'] for c in cards),
+        'tickets_backed_up': sum(c['tickets_backed_up'] for c in cards),
+        'issues': sum(1 for c in cards if c['red_flags']),
+    }
+
+    return render_template('tenants.html', cards=cards, fleet=fleet)
 
 
 @app.route('/api/tenants/<slug>/toggle', methods=['POST'])

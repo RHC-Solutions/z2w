@@ -12,9 +12,44 @@
 
 {% block content %}
 <style>
+/* ── Fleet summary bar ── */
+.fleet-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.fleet-stat {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius)*1.5);
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background 0.12s;
+}
+.fleet-stat:hover { background: var(--card-hover); }
+.fleet-stat .fs-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted-foreground);
+  display: flex; align-items: center; gap: 5px;
+}
+.fleet-stat .fs-label svg { width: 12px; height: 12px; flex-shrink: 0; }
+.fleet-stat .fs-value {
+  font-size: 22px; font-weight: 700; line-height: 1.1;
+  color: var(--foreground);
+}
+.fleet-stat .fs-sub { font-size: 11px; color: var(--muted-foreground); }
+.fleet-stat.primary .fs-value { color: var(--primary); }
+.fleet-stat.success .fs-value { color: var(--success); }
+.fleet-stat.warning .fs-value { color: var(--warning); }
+.fleet-stat.danger  .fs-value { color: var(--destructive); }
+
+/* ── Tenant cards grid ── */
 .tenants-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
   gap: 1.25rem;
 }
 
@@ -32,14 +67,14 @@
 
 /* ── Card header ── */
 .tc-header {
-  padding: .85rem 1rem .75rem;
+  padding: .9rem 1rem .8rem;
   display: flex;
   align-items: center;
-  gap: .75rem;
+  gap: .8rem;
   border-bottom: 1px solid var(--border);
 }
 .tc-avatar {
-  width: 40px; height: 40px;
+  width: 42px; height: 42px;
   border-radius: 10px;
   background: color-mix(in oklch, var(--primary) 18%, transparent);
   border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
@@ -51,8 +86,8 @@
 
 .tc-title { flex: 1; min-width: 0; }
 .tc-title h3 {
-  margin: 0 0 2px;
-  font-size: .95rem; font-weight: 700;
+  margin: 0 0 3px;
+  font-size: .98rem; font-weight: 700;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   color: var(--foreground);
 }
@@ -78,51 +113,71 @@
 /* ── Stats row ── */
 .tc-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   border-bottom: 1px solid var(--border);
 }
 .tc-stat {
-  padding: .65rem .5rem;
+  padding: .65rem .4rem;
   text-align: center;
   border-right: 1px solid var(--border);
 }
 .tc-stat:last-child { border-right: none; }
-.tc-stat .value { font-size: 1.05rem; font-weight: 700; color: var(--foreground); }
+.tc-stat .value { font-size: 1rem; font-weight: 700; color: var(--foreground); line-height: 1.2; }
 .tc-stat .value.warn { color: var(--warning); }
 .tc-stat .value.danger { color: var(--destructive); }
-.tc-stat .label { font-size: .65rem; color: var(--muted-foreground); margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
+.tc-stat .value.primary { color: var(--primary); }
+.tc-stat .value.success { color: var(--success); }
+.tc-stat .label { font-size: .63rem; color: var(--muted-foreground); margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
+
+/* ── Meta row (storage + last run) ── */
+.tc-meta {
+  padding: .5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: .72rem;
+  color: var(--muted-foreground);
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+}
+.tc-meta svg { flex-shrink: 0; opacity: .7; }
+.tc-meta b { color: var(--foreground); }
+.tc-meta .dot { color: var(--border); }
+.tc-meta .ago-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: oklch(0.73 0.1 221.7);
+  border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
+  border-radius: 999px; padding: 1px 7px; font-size: .67rem; font-weight: 600;
+}
 
 /* ── Last backup run ── */
 .tc-backup-run {
-  padding: .6rem 1rem;
+  padding: .55rem 1rem;
   border-bottom: 1px solid var(--border);
   font-size: .72rem;
   color: var(--muted-foreground);
   line-height: 1.6;
 }
 .tc-backup-run .run-title {
-  font-size: .7rem; font-weight: 600;
+  font-size: .68rem; font-weight: 600;
   color: var(--muted-foreground);
   text-transform: uppercase; letter-spacing: .04em;
   margin-bottom: 3px;
 }
 .tc-backup-run .run-line {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
 }
 .run-status {
   display: inline-flex; align-items: center; gap: 3px;
-  font-size: .68rem; font-weight: 600; padding: 1px 7px;
+  font-size: .67rem; font-weight: 600; padding: 1px 7px;
   border-radius: 999px; border: 1px solid transparent;
 }
 .run-ok      { background: color-mix(in oklch,var(--success) 15%,transparent); color: oklch(0.72 0.16 162); border-color: color-mix(in oklch,var(--success) 28%,transparent); }
 .run-warn    { background: color-mix(in oklch,var(--warning) 15%,transparent); color: oklch(0.82 0.16 70); border-color: color-mix(in oklch,var(--warning) 28%,transparent); }
 .run-err     { background: color-mix(in oklch,var(--destructive) 15%,transparent); color: oklch(0.72 0.22 27); border-color: color-mix(in oklch,var(--destructive) 28%,transparent); }
-.run-dot     { width: 5px; height: 5px; border-radius: 50%; background: var(--muted-foreground); display: inline-block; margin: 0 2px; vertical-align: middle; }
+.run-dot     { width: 4px; height: 4px; border-radius: 50%; background: var(--muted-foreground); display: inline-block; opacity: .5; }
 
 /* ── Flags ── */
 .tc-flags {
   padding: .45rem 1rem;
-  min-height: 26px;
+  min-height: 28px;
   display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
   border-bottom: 1px solid var(--border);
 }
@@ -132,15 +187,15 @@
   border: 1px solid color-mix(in oklch,var(--destructive) 25%,transparent);
   font-size: .67rem; padding: 1px 8px; border-radius: 999px; font-weight: 600;
 }
-.no-flags { font-size: .72rem; color: oklch(0.65 0.15 162); }
+.no-flags { font-size: .72rem; color: oklch(0.65 0.15 162); display: flex; align-items: center; gap: 4px; }
 
 /* ── Footer ── */
 .tc-footer {
   padding: .6rem 1rem;
-  display: flex; gap: .5rem; align-items: center;
+  display: flex; gap: .45rem; align-items: center;
   background: oklch(0.14 0.008 265);
 }
-.tc-footer .meta { font-size: .68rem; color: var(--muted-foreground); flex: 1; }
+.tc-footer .meta { font-size: .67rem; color: var(--muted-foreground); flex: 1; line-height: 1.4; }
 
 .empty-state {
   grid-column: 1 / -1;
@@ -153,6 +208,75 @@
 .empty-state p { font-size: .85rem; margin: 0 0 1.5rem; }
 </style>
 
+{% if fleet and fleet.total > 0 %}
+{# ── Fleet summary bar ── #}
+<div class="fleet-bar">
+
+  <div class="fleet-stat {% if fleet.issues > 0 %}danger{% else %}success{% endif %}">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Tenants
+    </div>
+    <div class="fs-value">{{ fleet.active }} <span style="font-size:14px;font-weight:500;color:var(--muted-foreground)">/ {{ fleet.total }}</span></div>
+    <div class="fs-sub">{{ fleet.configured }} configured</div>
+  </div>
+
+  <div class="fleet-stat primary">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+      Tickets Offloaded
+    </div>
+    <div class="fs-value">{{ '{:,}'.format(fleet.tickets_processed) }}</div>
+    <div class="fs-sub">{{ '{:,}'.format(fleet.total_attachments) }} attach · {{ '{:,}'.format(fleet.total_inlines) }} inline</div>
+  </div>
+
+  <div class="fleet-stat">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Offloaded to Wasabi
+    </div>
+    {% set tb = fleet.total_bytes %}
+    <div class="fs-value">
+      {% if tb >= 1073741824 %}{{ '%.1f'|format(tb/1073741824) }}<span style="font-size:14px;font-weight:500"> GB</span>
+      {% elif tb >= 1048576 %}{{ '%.1f'|format(tb/1048576) }}<span style="font-size:14px;font-weight:500"> MB</span>
+      {% else %}{{ '{:,}'.format(tb//1024) }}<span style="font-size:14px;font-weight:500"> KB</span>{% endif %}
+    </div>
+    <div class="fs-sub">across all tenants</div>
+  </div>
+
+  <div class="fleet-stat success">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Tickets Backed Up
+    </div>
+    <div class="fs-value">{{ '{:,}'.format(fleet.tickets_backed_up) }}</div>
+    <div class="fs-sub">closed-ticket archive</div>
+  </div>
+
+  {% if fleet.issues > 0 %}
+  <div class="fleet-stat danger">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="1" fill="currentColor" stroke="none"/></svg>
+      Issues
+    </div>
+    <div class="fs-value">{{ fleet.issues }}</div>
+    <div class="fs-sub">tenant{{ 's' if fleet.issues != 1 }} need attention</div>
+  </div>
+  {% else %}
+  <div class="fleet-stat success">
+    <div class="fs-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      Health
+    </div>
+    <div class="fs-value">All OK</div>
+    <div class="fs-sub">no issues detected</div>
+  </div>
+  {% endif %}
+
+</div>
+{% endif %}
+
+{# ── Tenant cards ── #}
 <div class="tenants-grid">
   {% if not cards %}
   <div class="empty-state">
@@ -174,7 +298,6 @@
     {# ── Header ── #}
     <div class="tc-header">
       <div class="tc-avatar">
-        {# Zendesk headset icon #}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
           <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
@@ -202,10 +325,10 @@
       {% endif %}
     </div>
 
-    {# ── Stats ── #}
-    <div class="tc-stats" style="grid-template-columns:repeat(4,1fr)">
+    {# ── Stats row — 5 columns ── #}
+    <div class="tc-stats" style="grid-template-columns:repeat(5,1fr)">
       <div class="tc-stat">
-        <div class="value">{{ '{:,}'.format(c.tickets_processed) }}</div>
+        <div class="value primary">{{ '{:,}'.format(c.tickets_processed) }}</div>
         <div class="label">Offloaded</div>
       </div>
       <div class="tc-stat">
@@ -213,7 +336,11 @@
         <div class="label">Attachments</div>
       </div>
       <div class="tc-stat">
-        <div class="value">{{ '{:,}'.format(c.tickets_backed_up) }}</div>
+        <div class="value">{{ '{:,}'.format(c.total_inlines_offloaded) }}</div>
+        <div class="label">Inlines</div>
+      </div>
+      <div class="tc-stat">
+        <div class="value success">{{ '{:,}'.format(c.tickets_backed_up) }}</div>
         <div class="label">Backed Up</div>
       </div>
       <div class="tc-stat">
@@ -224,22 +351,31 @@
       </div>
     </div>
 
-    {# ── Storage row ── #}
+    {# ── Meta row: storage + last offload ago ── #}
     {% set tb = c.total_bytes_offloaded %}
-    {% if tb > 0 %}
-    <div style="padding:.45rem 1rem;border-bottom:1px solid var(--border);font-size:.72rem;color:var(--muted-foreground);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+    <div class="tc-meta">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-      <span>Offloaded to Wasabi:
-        {% if tb >= 1073741824 %}<b>{{ '%.2f'|format(tb/1073741824) }} GB</b>
-        {% elif tb >= 1048576 %}<b>{{ '%.1f'|format(tb/1048576) }} MB</b>
-        {% else %}<b>{{ '{:,}'.format(tb//1024) }} KB</b>{% endif %}
-      </span>
-      {% if c.total_runs_today > 0 %}
-      <span style="color:var(--border)">·</span>
-      <span>{{ c.total_runs_today }} run{{ 's' if c.total_runs_today != 1 }} today</span>
+      {% if tb > 0 %}
+        <span>Wasabi:
+          {% if tb >= 1073741824 %}<b>{{ '%.2f'|format(tb/1073741824) }} GB</b>
+          {% elif tb >= 1048576 %}<b>{{ '%.1f'|format(tb/1048576) }} MB</b>
+          {% else %}<b>{{ '{:,}'.format(tb//1024) }} KB</b>{% endif %}
+        </span>
+      {% else %}
+        <span>Nothing offloaded yet</span>
+      {% endif %}
+      {% if c.total_runs > 0 %}
+        <span class="dot">·</span>
+        <span>{{ '{:,}'.format(c.total_runs) }} run{{ 's' if c.total_runs != 1 }}</span>
+      {% endif %}
+      {% if c.last_offload_ago %}
+        <span class="dot">·</span>
+        <span class="ago-chip">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          {{ c.last_offload_ago }}
+        </span>
       {% endif %}
     </div>
-    {% endif %}
 
     {# ── Last backup run ── #}
     <div class="tc-backup-run">
@@ -266,7 +402,7 @@
           </span>
         </div>
       {% else %}
-        <span style="color:var(--muted-foreground);font-style:italic">No backup runs yet</span>
+        <span style="font-style:italic">No backup runs yet</span>
       {% endif %}
     </div>
 
@@ -277,14 +413,24 @@
           <span class="flag-pill">⚑ {{ flag }}</span>
         {% endfor %}
       {% else %}
-        <span class="no-flags">✓ No issues</span>
+        <span class="no-flags">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          No issues
+        </span>
       {% endif %}
     </div>
 
     {# ── Footer ── #}
     <div class="tc-footer">
       <div class="meta">
-        {% if c.last_offload %}Last offload: {{ c.last_offload.strftime('%d %b %H:%M') }}{% else %}Never offloaded{% endif %}
+        {% if c.last_offload %}
+          Last offload: {{ c.last_offload.strftime('%d %b %H:%M') }}
+        {% else %}
+          Never offloaded
+        {% endif %}
+        {% if c.created_at %}
+          <br><span style="font-size:.63rem;opacity:.7">Since {{ c.created_at.strftime('%b %Y') }}</span>
+        {% endif %}
       </div>
       <a href="{{ url_for('tenant_dashboard', slug=c.slug) }}" class="btn btn-primary btn-xs">Open</a>
       <a href="{{ url_for('tenant_settings', slug=c.slug) }}" class="btn btn-secondary btn-xs">Settings</a>
