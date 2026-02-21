@@ -577,8 +577,30 @@ document.addEventListener('click', e => { if (e.target.classList.contains('modal
 
 function toggleTenantNav(slug) {
   const grp = document.getElementById('ntg-' + slug);
-  if (grp) grp.classList.toggle('expanded');
+  if (!grp) return;
+  grp.classList.toggle('expanded');
+  // Persist state: null = expanded (default), '0' = collapsed
+  try {
+    const expanded = grp.classList.contains('expanded');
+    localStorage.setItem('tnav_' + slug, expanded ? '1' : '0');
+  } catch(e) {}
 }
+
+// Restore tenant nav state from localStorage on every page load
+// Default is expanded — only collapse if explicitly stored as '0'
+(function restoreTenantNavState() {
+  document.querySelectorAll('[id^="ntg-"]').forEach(function(grp) {
+    const slug = grp.id.slice(4); // strip "ntg-"
+    let stored;
+    try { stored = localStorage.getItem('tnav_' + slug); } catch(e) {}
+    if (stored === '0') {
+      grp.classList.remove('expanded');
+    } else {
+      // null (never set) or '1' → expanded
+      grp.classList.add('expanded');
+    }
+  });
+})();
 </script>
 {% block scripts %}{% endblock %}
 </body>
