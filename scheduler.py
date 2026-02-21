@@ -468,9 +468,18 @@ class OffloadScheduler:
         except Exception as e:
             logger.error(f"Error in scheduled job: {e}", exc_info=True)
             try:
-                self.telegram_reporter.send_message(
-                    f"❌ <b>Offload job failed</b>\n\n<code>{str(e)[:500]}</code>"
-                )
+                from tenant_manager import list_tenants, get_tenant_config
+                from telegram_reporter import TelegramReporter as _TGR
+                for _t in list_tenants(active_only=True):
+                    _cfg = get_tenant_config(_t.slug)
+                    if _cfg and _cfg.alert_on_offload_error:
+                        if _cfg.telegram_bot_token and _cfg.telegram_chat_id:
+                            try:
+                                _TGR(_cfg.telegram_bot_token, _cfg.telegram_chat_id).send_message(
+                                    f"❌ <b>Offload job failed</b>\n\n<code>{str(e)[:500]}</code>"
+                                )
+                            except Exception:
+                                pass
             except Exception:
                 pass
         finally:
@@ -620,145 +629,165 @@ The backup file is being sent to you now...
     
     def daily_stats_job(self):
         """Run at 00:00 — aggregate the previous day's activity from OffloadLog +
-        TicketBackupRun and send one rich daily summary to Telegram and Slack."""
+        TicketBackupRun and send one rich daily summary per-tenant, respecting each
+        tenant's alert preferences."""
         logger.info("[DailyStats] Building daily summary report…")
         try:
             from datetime import timedelta
             import re as _re
+            import requests as _req
+            from tenant_manager import list_tenants, get_tenant_config
+            from telegram_reporter import TelegramReporter as _TGR
 
             now = datetime.utcnow()
-            # "yesterday" window: from 00:00 to 23:59:59 of the day that just ended
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_start = today_start - timedelta(days=1)
-            yesterday_end   = today_start
+            today_start      = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_start  = today_start - timedelta(days=1)
+            yesterday_end    = today_start
+            date_label       = yesterday_start.strftime('%d %b %Y')
 
-            db = get_db()
-            try:
-                offload_logs = db.query(OffloadLog).filter(
-                    OffloadLog.run_date >= yesterday_start,
-                    OffloadLog.run_date <  yesterday_end,
-                ).all()
+            for tenant in list_tenants(active_only=True):
+                cfg = get_tenant_config(tenant.slug)
+                if not cfg or not cfg.alert_daily_report:
+                    continue
 
-                backup_runs = db.query(TicketBackupRun).filter(
-                    TicketBackupRun.run_date >= yesterday_start,
-                    TicketBackupRun.run_date <  yesterday_end,
-                ).all() if hasattr(TicketBackupRun, 'run_date') else []
-            finally:
-                db.close()
+                logger.info(f"[DailyStats] Building report for tenant: {tenant.slug}")
 
-            date_label = yesterday_start.strftime('%d %b %Y')
+                # ── Query this tenant's DB ────────────────────────────────
+                db = get_db()
+                try:
+                    offload_logs = db.query(OffloadLog).filter(
+                        OffloadLog.run_date >= yesterday_start,
+                        OffloadLog.run_date <  yesterday_end,
+                    ).all()
 
-            # ── Offload totals ────────────────────────────────────────────
-            total_runs       = len(offload_logs)
-            total_tickets    = sum(r.tickets_processed or 0 for r in offload_logs)
-            total_attachments= sum(r.attachments_uploaded or 0 for r in offload_logs)
-            total_inlines    = sum(r.inlines_uploaded or 0 for r in offload_logs)
-            total_errors     = sum(r.errors_count or 0 for r in offload_logs)
+                    backup_runs = db.query(TicketBackupRun).filter(
+                        TicketBackupRun.run_date >= yesterday_start,
+                        TicketBackupRun.run_date <  yesterday_end,
+                    ).all() if hasattr(TicketBackupRun, 'run_date') else []
+                finally:
+                    db.close()
 
-            # ── Backup totals ─────────────────────────────────────────────
-            bak_runs         = len(backup_runs)
-            bak_scanned      = sum(r.tickets_scanned or 0 for r in backup_runs)
-            bak_backed_up    = sum(r.tickets_backed_up or 0 for r in backup_runs)
-            bak_files        = sum(r.files_uploaded or 0 for r in backup_runs)
-            bak_bytes        = sum(r.bytes_uploaded or 0 for r in backup_runs)
-            bak_errors       = sum(r.errors_count or 0 for r in backup_runs)
-            bak_mb           = bak_bytes / 1048576
+                # ── Offload totals ────────────────────────────────────────
+                total_runs        = len(offload_logs)
+                total_tickets     = sum(r.tickets_processed or 0 for r in offload_logs)
+                total_attachments = sum(r.attachments_uploaded or 0 for r in offload_logs)
+                total_inlines     = sum(r.inlines_uploaded or 0 for r in offload_logs)
+                total_errors      = sum(r.errors_count or 0 for r in offload_logs)
 
-            overall_ok = (total_errors == 0 and bak_errors == 0)
-            emoji = '✅' if overall_ok else '⚠️'
+                # ── Backup totals ─────────────────────────────────────────
+                bak_runs    = len(backup_runs)
+                bak_scanned = sum(r.tickets_scanned or 0 for r in backup_runs)
+                bak_backed  = sum(r.tickets_backed_up or 0 for r in backup_runs)
+                bak_files   = sum(r.files_uploaded or 0 for r in backup_runs)
+                bak_bytes   = sum(r.bytes_uploaded or 0 for r in backup_runs)
+                bak_errors  = sum(r.errors_count or 0 for r in backup_runs)
+                bak_mb      = bak_bytes / 1048576
 
-            # ── Telegram (HTML) ───────────────────────────────────────────
-            tg_msg = (
-                f"{emoji} <b>Z2W Daily Report — {date_label}</b>\n"
-                f"\n"
-                f"📤 <b>Attachment Offload</b>\n"
-                f"  • Runs: <b>{total_runs}</b>\n"
-                f"  • Tickets processed: <b>{total_tickets:,}</b>\n"
-                f"  • Attachments uploaded: <b>{total_attachments:,}</b>\n"
-            )
-            if total_inlines:
-                tg_msg += f"  • Inline images uploaded: <b>{total_inlines:,}</b>\n"
-            tg_msg += f"  • Errors: <b>{total_errors}</b>\n"
+                overall_ok  = (total_errors == 0 and bak_errors == 0)
+                emoji       = '✅' if overall_ok else '⚠️'
+                status_text = '✅ All clear' if overall_ok else '⚠️ Errors detected'
+                tenant_name = cfg.display_name or tenant.slug
 
-            tg_msg += (
-                f"\n"
-                f"💾 <b>Closed-Ticket Backup</b>\n"
-                f"  • Runs: <b>{bak_runs}</b>\n"
-                f"  • Tickets scanned: <b>{bak_scanned:,}</b>\n"
-                f"  • Tickets backed up: <b>{bak_backed_up:,}</b>\n"
-                f"  • Files uploaded: <b>{bak_files:,}</b>\n"
-                f"  • Data uploaded: <b>{bak_mb:.1f} MB</b>\n"
-                f"  • Errors: <b>{bak_errors}</b>\n"
-            )
-
-            if not overall_ok:
+                # ── Build error detail lines (shared) ─────────────────────
                 err_detail = []
-                for r in offload_logs:
-                    if r.errors_count:
-                        err_detail.append(f"  Offload run {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
-                for r in backup_runs:
-                    if r.errors_count:
-                        err_detail.append(f"  Backup run {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
-                if err_detail:
-                    tg_msg += "\n❌ <b>Error Detail:</b>\n" + "\n".join(err_detail[:10]) + "\n"
+                if cfg.alert_include_errors_detail and not overall_ok:
+                    for r in offload_logs:
+                        if r.errors_count:
+                            err_detail.append(f"  Offload {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
+                    for r in backup_runs:
+                        if r.errors_count:
+                            err_detail.append(f"  Backup {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
 
-            try:
-                self.telegram_reporter.send_message(tg_msg.strip())
-                logger.info("[DailyStats] Telegram report sent")
-            except Exception as te:
-                logger.error(f"[DailyStats] Telegram send failed: {te}")
+                # ── Telegram ─────────────────────────────────────────────
+                if cfg.alert_daily_telegram and cfg.telegram_bot_token and cfg.telegram_chat_id:
+                    tg_msg = f"{emoji} <b>Z2W Daily Report — {date_label}</b>\n<i>{tenant_name}</i>\n"
 
-            # ── Slack (blocks) ────────────────────────────────────────────
-            def _strip_html(s):
-                return _re.sub(r'<[^>]+>', '', s)
+                    if cfg.alert_include_offload_stats:
+                        tg_msg += (
+                            f"\n📤 <b>Attachment Offload</b>\n"
+                            f"  • Runs: <b>{total_runs}</b>\n"
+                            f"  • Tickets processed: <b>{total_tickets:,}</b>\n"
+                            f"  • Attachments uploaded: <b>{total_attachments:,}</b>\n"
+                        )
+                        if total_inlines:
+                            tg_msg += f"  • Inline images uploaded: <b>{total_inlines:,}</b>\n"
+                        tg_msg += f"  • Errors: <b>{total_errors}</b>\n"
 
-            status_text = "✅ All clear" if overall_ok else "⚠️ Errors detected"
-            slack_payload = {
-                "blocks": [
-                    {
-                        "type": "header",
-                        "text": {"type": "plain_text", "text": f"{emoji} Z2W Daily Report — {date_label}"}
-                    },
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"*Status:* {status_text}"}
-                    },
-                    {"type": "divider"},
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": "*📤 Attachment Offload*"},
-                        "fields": [
-                            {"type": "mrkdwn", "text": f"*Runs*\n{total_runs}"},
-                            {"type": "mrkdwn", "text": f"*Tickets processed*\n{total_tickets:,}"},
-                            {"type": "mrkdwn", "text": f"*Attachments uploaded*\n{total_attachments:,}"},
-                            {"type": "mrkdwn", "text": f"*Errors*\n{total_errors}"},
+                    if cfg.alert_include_backup_stats:
+                        tg_msg += (
+                            f"\n💾 <b>Closed-Ticket Backup</b>\n"
+                            f"  • Runs: <b>{bak_runs}</b>\n"
+                            f"  • Tickets scanned: <b>{bak_scanned:,}</b>\n"
+                            f"  • Tickets backed up: <b>{bak_backed:,}</b>\n"
+                            f"  • Files uploaded: <b>{bak_files:,}</b>\n"
+                            f"  • Data uploaded: <b>{bak_mb:.1f} MB</b>\n"
+                            f"  • Errors: <b>{bak_errors}</b>\n"
+                        )
+
+                    if err_detail:
+                        tg_msg += "\n❌ <b>Error Detail:</b>\n" + "\n".join(err_detail[:10]) + "\n"
+
+                    try:
+                        _TGR(cfg.telegram_bot_token, cfg.telegram_chat_id).send_message(tg_msg.strip())
+                        logger.info(f"[DailyStats] Telegram report sent for {tenant.slug}")
+                    except Exception as te:
+                        logger.error(f"[DailyStats] Telegram send failed for {tenant.slug}: {te}")
+
+                # ── Slack ─────────────────────────────────────────────────
+                if cfg.alert_daily_slack and cfg.slack_webhook_url:
+                    slack_blocks = [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": f"{emoji} Z2W Daily Report — {date_label}"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": f"*{tenant_name}* · *Status:* {status_text}"}
+                        },
+                    ]
+                    if cfg.alert_include_offload_stats:
+                        slack_blocks += [
+                            {"type": "divider"},
+                            {
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": "*📤 Attachment Offload*"},
+                                "fields": [
+                                    {"type": "mrkdwn", "text": f"*Runs*\n{total_runs}"},
+                                    {"type": "mrkdwn", "text": f"*Tickets processed*\n{total_tickets:,}"},
+                                    {"type": "mrkdwn", "text": f"*Attachments uploaded*\n{total_attachments:,}"},
+                                    {"type": "mrkdwn", "text": f"*Errors*\n{total_errors}"},
+                                ]
+                            },
                         ]
-                    },
-                    {"type": "divider"},
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": "*💾 Closed-Ticket Backup*"},
-                        "fields": [
-                            {"type": "mrkdwn", "text": f"*Runs*\n{bak_runs}"},
-                            {"type": "mrkdwn", "text": f"*Tickets backed up*\n{bak_backed_up:,} / {bak_scanned:,}"},
-                            {"type": "mrkdwn", "text": f"*Files uploaded*\n{bak_files:,}"},
-                            {"type": "mrkdwn", "text": f"*Data uploaded*\n{bak_mb:.1f} MB"},
-                            {"type": "mrkdwn", "text": f"*Errors*\n{bak_errors}"},
+                    if cfg.alert_include_backup_stats:
+                        slack_blocks += [
+                            {"type": "divider"},
+                            {
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": "*💾 Closed-Ticket Backup*"},
+                                "fields": [
+                                    {"type": "mrkdwn", "text": f"*Runs*\n{bak_runs}"},
+                                    {"type": "mrkdwn", "text": f"*Tickets backed up*\n{bak_backed:,} / {bak_scanned:,}"},
+                                    {"type": "mrkdwn", "text": f"*Files uploaded*\n{bak_files:,}"},
+                                    {"type": "mrkdwn", "text": f"*Data uploaded*\n{bak_mb:.1f} MB"},
+                                    {"type": "mrkdwn", "text": f"*Errors*\n{bak_errors}"},
+                                ]
+                            },
                         ]
-                    },
-                    {
+                    if err_detail:
+                        slack_blocks.append({
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "❌ *Error Detail*\n" + "\n".join(err_detail[:10])}
+                        })
+                    slack_blocks.append({
                         "type": "context",
                         "elements": [{"type": "mrkdwn", "text": f"Z2W · {now.strftime('%Y-%m-%d %H:%M')} UTC"}]
-                    },
-                ]
-            }
-            try:
-                if self.slack_reporter.webhook_url:
-                    import requests as _req
-                    _req.post(self.slack_reporter.webhook_url, json=slack_payload, timeout=10)
-                    logger.info("[DailyStats] Slack report sent")
-            except Exception as se:
-                logger.error(f"[DailyStats] Slack send failed: {se}")
+                    })
+                    try:
+                        _req.post(cfg.slack_webhook_url, json={"blocks": slack_blocks}, timeout=10)
+                        logger.info(f"[DailyStats] Slack report sent for {tenant.slug}")
+                    except Exception as se:
+                        logger.error(f"[DailyStats] Slack send failed for {tenant.slug}: {se}")
 
         except Exception as e:
             logger.error(f"[DailyStats] Unhandled exception: {e}", exc_info=True)
@@ -1033,7 +1062,18 @@ The backup file is being sent to you now...
         except Exception as e:
             logger.error(f"[TicketBackup] Error: {e}", exc_info=True)
             try:
-                self.telegram_reporter.send_message(f"❌ <b>Closed-Ticket Backup Failed</b>\n\n{e}")
+                from tenant_manager import list_tenants, get_tenant_config
+                from telegram_reporter import TelegramReporter as _TGR
+                for _t in list_tenants(active_only=True):
+                    _cfg = get_tenant_config(_t.slug)
+                    if _cfg and _cfg.alert_on_backup_error:
+                        if _cfg.telegram_bot_token and _cfg.telegram_chat_id:
+                            try:
+                                _TGR(_cfg.telegram_bot_token, _cfg.telegram_chat_id).send_message(
+                                    f"❌ <b>Closed-Ticket Backup Failed</b>\n\n{e}"
+                                )
+                            except Exception:
+                                pass
             except Exception:
                 pass
         finally:

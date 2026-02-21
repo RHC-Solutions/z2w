@@ -246,6 +246,59 @@
     </div>
   </div>
 
+  <!-- Alerts -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <!-- Bell icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <h3>Alerts &amp; Notifications</h3>
+    </div>
+    <div class="ts-body" style="grid-template-columns:1fr;">
+
+      <div style="font-size:.72rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding-bottom:.3rem;border-bottom:1px solid var(--border,.2a2a3e);margin-bottom:.2rem;">Immediate Alerts (on failure)</div>
+      <label class="check-row">
+        <input type="checkbox" name="alert_on_offload_error" {% if cfg.alert_on_offload_error %}checked{% endif %}>
+        Send alert when offload job crashes
+      </label>
+      <label class="check-row" style="margin-top:.4rem">
+        <input type="checkbox" name="alert_on_backup_error" {% if cfg.alert_on_backup_error %}checked{% endif %}>
+        Send alert when backup job crashes
+      </label>
+
+      <div style="font-size:.72rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding-bottom:.3rem;border-bottom:1px solid var(--border,.2a2a3e);margin-top:1rem;margin-bottom:.2rem;">Daily Report (sent at 00:01)</div>
+      <label class="check-row">
+        <input type="checkbox" name="alert_daily_report" {% if cfg.alert_daily_report %}checked{% endif %}>
+        Enable daily summary report
+      </label>
+      <label class="check-row" style="margin-top:.4rem;padding-left:1.2rem;">
+        <input type="checkbox" name="alert_daily_telegram" {% if cfg.alert_daily_telegram %}checked{% endif %}>
+        Send via Telegram
+      </label>
+      <label class="check-row" style="margin-top:.4rem;padding-left:1.2rem;">
+        <input type="checkbox" name="alert_daily_slack" {% if cfg.alert_daily_slack %}checked{% endif %}>
+        Send via Slack
+      </label>
+
+      <div style="font-size:.72rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding-bottom:.3rem;border-bottom:1px solid var(--border,.2a2a3e);margin-top:1rem;margin-bottom:.2rem;">Daily Report Content</div>
+      <label class="check-row">
+        <input type="checkbox" name="alert_include_offload_stats" {% if cfg.alert_include_offload_stats %}checked{% endif %}>
+        Include attachment offload statistics
+      </label>
+      <label class="check-row" style="margin-top:.4rem">
+        <input type="checkbox" name="alert_include_backup_stats" {% if cfg.alert_include_backup_stats %}checked{% endif %}>
+        Include closed-ticket backup statistics
+      </label>
+      <label class="check-row" style="margin-top:.4rem">
+        <input type="checkbox" name="alert_include_errors_detail" {% if cfg.alert_include_errors_detail %}checked{% endif %}>
+        Include error detail lines when errors &gt; 0
+      </label>
+
+    </div>
+    <div class="ts-footer">
+      <button type="submit" class="btn-save">Save Settings</button>
+    </div>
+  </div>
+
 </div>
 </form>
 {% endblock %}

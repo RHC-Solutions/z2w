@@ -465,9 +465,12 @@ def tenants_overview():
             'wasabi_bucket': cfg.wasabi_bucket_name if cfg else '',
             'tickets_processed': 0,
             'tickets_backed_up': 0,
+            'total_attachments': 0,
+            'total_bytes_offloaded': 0,
+            'total_runs_today': 0,
             'last_offload': None,
             'last_backup': None,
-            'last_backup_run': None,   # full TicketBackupRun row
+            'last_backup_run': None,
             'errors_today': 0,
             'storage_bytes': 0,
             'red_flags': [],
@@ -476,13 +479,31 @@ def tenants_overview():
         try:
             tdb = get_tenant_db_session(t.slug)
             from database import ProcessedTicket, OffloadLog, TicketBackupItem, TicketBackupRun
+            from datetime import timedelta
+            now = datetime.utcnow()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
             card['tickets_processed'] = tdb.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
             card['tickets_backed_up'] = tdb.query(sqlfunc.count(TicketBackupItem.id))\
                 .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+
+            # Total attachments + bytes across all processed tickets
+            att_row = tdb.query(
+                sqlfunc.sum(ProcessedTicket.attachments_count),
+                sqlfunc.sum(ProcessedTicket.wasabi_files_size),
+            ).first()
+            card['total_attachments'] = int(att_row[0] or 0)
+            card['total_bytes_offloaded'] = int(att_row[1] or 0)
+
+            # Offload runs today + last offload
             last_log = tdb.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
             if last_log:
                 card['last_offload'] = last_log.run_date
                 card['errors_today'] = last_log.errors_count or 0
+            today_runs = tdb.query(sqlfunc.count(OffloadLog.id))\
+                .filter(OffloadLog.run_date >= today_start).scalar() or 0
+            card['total_runs_today'] = today_runs
+
             last_bak = tdb.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
             if last_bak:
                 card['last_backup'] = last_bak.run_date
@@ -496,8 +517,6 @@ def tenants_overview():
                     'status': last_bak.status or 'completed',
                 }
             # Red flags
-            from datetime import timedelta
-            now = datetime.utcnow()
             if last_log and (now - last_log.run_date) > timedelta(hours=2):
                 card['red_flags'].append('No offload in 2h+')
             failed_today = tdb.query(sqlfunc.count(TicketBackupItem.id))\
@@ -858,7 +877,11 @@ def tenant_settings(slug):
                     setattr(cfg, int_field, int(d[int_field]))
                 except ValueError:
                     pass
-        for bool_field in ['attach_offload_enabled', 'ticket_backup_enabled']:
+        for bool_field in ['attach_offload_enabled', 'ticket_backup_enabled',
+                           'alert_on_offload_error', 'alert_on_backup_error',
+                           'alert_daily_report', 'alert_daily_telegram', 'alert_daily_slack',
+                           'alert_include_offload_stats', 'alert_include_backup_stats',
+                           'alert_include_errors_detail']:
             setattr(cfg, bool_field, bool_field in d)
         save_tenant_config(cfg)
         flash('Settings saved', 'success')

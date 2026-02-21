@@ -135,6 +135,16 @@ class TenantConfig:
     slack_webhook_url: str = ''
     slack_bot_token: str = ''
 
+    # Alert preferences
+    alert_on_offload_error: bool = True      # immediate alert when offload job crashes
+    alert_on_backup_error: bool = True       # immediate alert when backup job crashes
+    alert_daily_report: bool = True          # send daily stats at 00:01
+    alert_daily_telegram: bool = True        # daily report → Telegram
+    alert_daily_slack: bool = True           # daily report → Slack
+    alert_include_offload_stats: bool = True # include offload section in daily report
+    alert_include_backup_stats: bool = True  # include backup section in daily report
+    alert_include_errors_detail: bool = True # include error detail lines in daily report
+
     # Scheduler / offload settings (per-tenant overrides)
     continuous_offload_interval: int = 5
     scheduler_timezone: str = 'UTC'
