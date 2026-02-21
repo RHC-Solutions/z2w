@@ -11,7 +11,7 @@ from telegram_reporter import TelegramReporter
 from slack_reporter import SlackReporter
 from backup_manager import BackupManager
 from ticket_backup_manager import TicketBackupManager
-from database import get_db, OffloadLog, ZendeskStorageSnapshot, Setting
+from database import get_db, OffloadLog, ZendeskStorageSnapshot, Setting, TicketBackupRun
 from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
 import logging
 import threading
@@ -434,17 +434,6 @@ class OffloadScheduler:
                     f"[Continuous] tickets={stats['checked']} skipped={stats['already_done']} "
                     f"new={newly} files={uploaded} size={size_mb:.1f}MB errors={len(errors)}"
                 )
-            if newly > 0:
-                try:
-                    self.telegram_reporter.send_message(
-                        f"⚡ <b>Continuous offload</b>\n"
-                        f"📋 New tickets processed: {newly}\n"
-                        f"📁 Files uploaded: {uploaded}\n"
-                        f"💾 Size: {size_mb:.1f} MB"
-                        + (f"\n❌ Errors: {len(errors)}" if errors else "")
-                    )
-                except Exception:
-                    pass
         except Exception as e:
             logger.error(f"[Continuous offload] Unhandled exception: {e}", exc_info=True)
         finally:
@@ -470,49 +459,14 @@ class OffloadScheduler:
             self._job_running = True
             start_time = datetime.utcnow()
             logger.info(f"Scheduled offload job started at {start_time}")
-            print(f"Scheduled offload job started at {start_time}")
-            try:
-                self.telegram_reporter.send_message(
-                    f"🔄 <b>Offload job started</b>\n📅 {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-                )
-            except Exception:
-                pass
 
             # Run offload
             summary = self.offloader.run_offload()
 
-            # Only send full reports when something was actually processed or there were errors
-            processed = summary.get("tickets_processed", 0)
-            errors = summary.get("errors", [])
-            inlines = summary.get("inlines_uploaded", 0)
-            uploaded = summary.get("attachments_uploaded", 0)
-
-            if processed > 0 or errors or inlines > 0 or uploaded > 0:
-                email_sent = self.email_reporter.send_report(summary)
-                telegram_sent = self.telegram_reporter.send_report(summary)
-                slack_sent = self.slack_reporter.send_report(summary)
-                logger.info(f"Reports sent - Email: {email_sent}, Telegram: {telegram_sent}, Slack: {slack_sent}")
-            else:
-                email_sent = telegram_sent = slack_sent = False
-                logger.debug(f"[Offload] No new tickets processed — skipping notification")
-
-            # Update log entry
-            db = get_db()
-            try:
-                if summary.get("log_id"):
-                    log_entry = db.query(OffloadLog).filter_by(id=summary["log_id"]).first()
-                    if log_entry:
-                        log_entry.report_sent = email_sent or telegram_sent or slack_sent
-                        db.commit()
-            finally:
-                db.close()
-
             logger.info(f"Scheduled offload job completed at {datetime.utcnow()}")
-            print(f"Scheduled offload job completed at {datetime.utcnow()}")
 
         except Exception as e:
             logger.error(f"Error in scheduled job: {e}", exc_info=True)
-            print(f"ERROR in scheduled job: {e}")
             try:
                 self.telegram_reporter.send_message(
                     f"❌ <b>Offload job failed</b>\n\n<code>{str(e)[:500]}</code>"
@@ -664,6 +618,151 @@ The backup file is being sent to you now...
             self._backup_running = False
             self._backup_lock.release()
     
+    def daily_stats_job(self):
+        """Run at 00:00 — aggregate the previous day's activity from OffloadLog +
+        TicketBackupRun and send one rich daily summary to Telegram and Slack."""
+        logger.info("[DailyStats] Building daily summary report…")
+        try:
+            from datetime import timedelta
+            import re as _re
+
+            now = datetime.utcnow()
+            # "yesterday" window: from 00:00 to 23:59:59 of the day that just ended
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_start = today_start - timedelta(days=1)
+            yesterday_end   = today_start
+
+            db = get_db()
+            try:
+                offload_logs = db.query(OffloadLog).filter(
+                    OffloadLog.run_date >= yesterday_start,
+                    OffloadLog.run_date <  yesterday_end,
+                ).all()
+
+                backup_runs = db.query(TicketBackupRun).filter(
+                    TicketBackupRun.run_date >= yesterday_start,
+                    TicketBackupRun.run_date <  yesterday_end,
+                ).all() if hasattr(TicketBackupRun, 'run_date') else []
+            finally:
+                db.close()
+
+            date_label = yesterday_start.strftime('%d %b %Y')
+
+            # ── Offload totals ────────────────────────────────────────────
+            total_runs       = len(offload_logs)
+            total_tickets    = sum(r.tickets_processed or 0 for r in offload_logs)
+            total_attachments= sum(r.attachments_uploaded or 0 for r in offload_logs)
+            total_inlines    = sum(r.inlines_uploaded or 0 for r in offload_logs)
+            total_errors     = sum(r.errors_count or 0 for r in offload_logs)
+
+            # ── Backup totals ─────────────────────────────────────────────
+            bak_runs         = len(backup_runs)
+            bak_scanned      = sum(r.tickets_scanned or 0 for r in backup_runs)
+            bak_backed_up    = sum(r.tickets_backed_up or 0 for r in backup_runs)
+            bak_files        = sum(r.files_uploaded or 0 for r in backup_runs)
+            bak_bytes        = sum(r.bytes_uploaded or 0 for r in backup_runs)
+            bak_errors       = sum(r.errors_count or 0 for r in backup_runs)
+            bak_mb           = bak_bytes / 1048576
+
+            overall_ok = (total_errors == 0 and bak_errors == 0)
+            emoji = '✅' if overall_ok else '⚠️'
+
+            # ── Telegram (HTML) ───────────────────────────────────────────
+            tg_msg = (
+                f"{emoji} <b>Z2W Daily Report — {date_label}</b>\n"
+                f"\n"
+                f"📤 <b>Attachment Offload</b>\n"
+                f"  • Runs: <b>{total_runs}</b>\n"
+                f"  • Tickets processed: <b>{total_tickets:,}</b>\n"
+                f"  • Attachments uploaded: <b>{total_attachments:,}</b>\n"
+            )
+            if total_inlines:
+                tg_msg += f"  • Inline images uploaded: <b>{total_inlines:,}</b>\n"
+            tg_msg += f"  • Errors: <b>{total_errors}</b>\n"
+
+            tg_msg += (
+                f"\n"
+                f"💾 <b>Closed-Ticket Backup</b>\n"
+                f"  • Runs: <b>{bak_runs}</b>\n"
+                f"  • Tickets scanned: <b>{bak_scanned:,}</b>\n"
+                f"  • Tickets backed up: <b>{bak_backed_up:,}</b>\n"
+                f"  • Files uploaded: <b>{bak_files:,}</b>\n"
+                f"  • Data uploaded: <b>{bak_mb:.1f} MB</b>\n"
+                f"  • Errors: <b>{bak_errors}</b>\n"
+            )
+
+            if not overall_ok:
+                err_detail = []
+                for r in offload_logs:
+                    if r.errors_count:
+                        err_detail.append(f"  Offload run {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
+                for r in backup_runs:
+                    if r.errors_count:
+                        err_detail.append(f"  Backup run {r.run_date.strftime('%H:%M')}: {r.errors_count} error(s)")
+                if err_detail:
+                    tg_msg += "\n❌ <b>Error Detail:</b>\n" + "\n".join(err_detail[:10]) + "\n"
+
+            try:
+                self.telegram_reporter.send_message(tg_msg.strip())
+                logger.info("[DailyStats] Telegram report sent")
+            except Exception as te:
+                logger.error(f"[DailyStats] Telegram send failed: {te}")
+
+            # ── Slack (blocks) ────────────────────────────────────────────
+            def _strip_html(s):
+                return _re.sub(r'<[^>]+>', '', s)
+
+            status_text = "✅ All clear" if overall_ok else "⚠️ Errors detected"
+            slack_payload = {
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": f"{emoji} Z2W Daily Report — {date_label}"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"*Status:* {status_text}"}
+                    },
+                    {"type": "divider"},
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "*📤 Attachment Offload*"},
+                        "fields": [
+                            {"type": "mrkdwn", "text": f"*Runs*\n{total_runs}"},
+                            {"type": "mrkdwn", "text": f"*Tickets processed*\n{total_tickets:,}"},
+                            {"type": "mrkdwn", "text": f"*Attachments uploaded*\n{total_attachments:,}"},
+                            {"type": "mrkdwn", "text": f"*Errors*\n{total_errors}"},
+                        ]
+                    },
+                    {"type": "divider"},
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": "*💾 Closed-Ticket Backup*"},
+                        "fields": [
+                            {"type": "mrkdwn", "text": f"*Runs*\n{bak_runs}"},
+                            {"type": "mrkdwn", "text": f"*Tickets backed up*\n{bak_backed_up:,} / {bak_scanned:,}"},
+                            {"type": "mrkdwn", "text": f"*Files uploaded*\n{bak_files:,}"},
+                            {"type": "mrkdwn", "text": f"*Data uploaded*\n{bak_mb:.1f} MB"},
+                            {"type": "mrkdwn", "text": f"*Errors*\n{bak_errors}"},
+                        ]
+                    },
+                    {
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": f"Z2W · {now.strftime('%Y-%m-%d %H:%M')} UTC"}]
+                    },
+                ]
+            }
+            try:
+                if self.slack_reporter.webhook_url:
+                    import requests as _req
+                    _req.post(self.slack_reporter.webhook_url, json=slack_payload, timeout=10)
+                    logger.info("[DailyStats] Slack report sent")
+            except Exception as se:
+                logger.error(f"[DailyStats] Slack send failed: {se}")
+
+        except Exception as e:
+            logger.error(f"[DailyStats] Unhandled exception: {e}", exc_info=True)
+
     def start(self):
         """Start the scheduler"""
         # Re-import config to get latest values
@@ -700,6 +799,16 @@ The backup file is being sent to you now...
                 replace_existing=True
             )
             logger.info(f"Scheduled daily backup job for 00:00 {SCHEDULER_TIMEZONE}")
+
+            # Schedule daily statistics report at 00:01 (after daily_backup at 00:00)
+            self.scheduler.add_job(
+                self.daily_stats_job,
+                trigger=CronTrigger(hour=0, minute=1, timezone=SCHEDULER_TIMEZONE),
+                id='daily_stats',
+                name='Daily Statistics Report',
+                replace_existing=True
+            )
+            logger.info(f"Scheduled daily stats report for 00:01 {SCHEDULER_TIMEZONE}")
 
             # Schedule daily recheck-all — hour configurable via Settings page
             from config import RECHECK_HOUR, CONTINUOUS_OFFLOAD_INTERVAL
@@ -916,31 +1025,6 @@ The backup file is being sent to you now...
             bts = stats.get('bytes_uploaded', 0)
             errs = stats.get('errors', [])
             mb = bts / 1048576
-
-            emoji = '✅' if not errs else '⚠️'
-            msg = (
-                f"{emoji} <b>Closed-Ticket Backup</b>\n\n"
-                f"📋 Scanned: <b>{scanned}</b>\n"
-                f"💾 Backed up: <b>{backed}</b>\n"
-                f"📎 Files uploaded: <b>{files}</b>\n"
-                f"📦 Size: <b>{mb:.1f} MB</b>\n"
-            )
-            if errs:
-                msg += f"❌ Errors: <b>{len(errs)}</b>\n"
-                for e in errs[:5]:
-                    msg += f"  • {e}\n"
-
-            try:
-                self.telegram_reporter.send_message(msg.strip())
-            except Exception:
-                pass
-            try:
-                slack_text = msg.replace('<b>', '*').replace('</b>', '*').replace('<br>', '\n')
-                import re as _re
-                slack_text = _re.sub(r'<[^>]+>', '', slack_text)
-                self.slack_reporter.send_message(slack_text.strip())
-            except Exception:
-                pass
 
             logger.info(
                 f"[TicketBackup] Completed — scanned={scanned}, backed_up={backed}, "
