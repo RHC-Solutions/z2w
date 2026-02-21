@@ -446,6 +446,11 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
                 <span>Storage</span>
               </a>
+              <a href="{{ url_for('tenant_bucket_browser', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint == 'tenant_bucket_browser' and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg>
+                <span>Bucket Browser</span>
+              </a>
               <a href="{{ url_for('tenant_ticket_backup', slug=_t.slug) }}"
                  class="nav-item nav-sub {% if request.endpoint in ('tenant_ticket_backup','ticket_backup') and _t.slug == _cur_slug %}active{% endif %}">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>

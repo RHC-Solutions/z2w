@@ -7,6 +7,15 @@ from datetime import datetime
 from typing import Optional
 from config import WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
 
+def _human_size(n: int) -> str:
+    """Return a human-readable file size string."""
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if n < 1024:
+            return f'{n:.1f} {unit}' if unit != 'B' else f'{n} B'
+        n /= 1024
+    return f'{n:.1f} PB'
+
+
 class WasabiClient:
     """Client for interacting with Wasabi B2 storage"""
     
@@ -166,6 +175,58 @@ class WasabiClient:
         except Exception as e:
             stats["error"] = str(e)
         return stats
+
+    def list_objects(self, prefix: str = '', delimiter: str = '/') -> dict:
+        """
+        List objects (files) and common prefixes (folders) at the given prefix.
+
+        Returns:
+            {
+              'folders': [{'prefix': str, 'name': str}, ...],
+              'files':   [{'key': str, 'name': str, 'size': int,
+                           'size_human': str, 'last_modified': datetime}, ...],
+              'error': str | None
+            }
+        """
+        result = {'folders': [], 'files': [], 'error': None}
+        try:
+            client = self._get_s3_client()
+            paginator = client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(
+                Bucket=self.bucket_name,
+                Prefix=prefix,
+                Delimiter=delimiter,
+            )
+            for page in pages:
+                for cp in page.get('CommonPrefixes') or []:
+                    p = cp['Prefix']
+                    name = p.rstrip('/').split('/')[-1]
+                    result['folders'].append({'prefix': p, 'name': name})
+                for obj in page.get('Contents') or []:
+                    key = obj['Key']
+                    if key == prefix:          # skip the "folder" placeholder itself
+                        continue
+                    name = key.split('/')[-1]
+                    size = obj.get('Size', 0)
+                    result['files'].append({
+                        'key': key,
+                        'name': name,
+                        'size': size,
+                        'size_human': _human_size(size),
+                        'last_modified': obj.get('LastModified'),
+                    })
+        except Exception as e:
+            result['error'] = str(e)
+        return result
+
+    def presign_url(self, key: str, expires_in: int = 3600) -> str:
+        """Return a presigned GET URL for *key*, valid for *expires_in* seconds."""
+        client = self._get_s3_client()
+        return client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': self.bucket_name, 'Key': key},
+            ExpiresIn=expires_in,
+        )
 
     def test_connection(self) -> tuple[bool, str]:
         """Test connection to Wasabi B2

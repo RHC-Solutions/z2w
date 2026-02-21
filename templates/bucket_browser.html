@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title %}Bucket Browser — {{ cfg.display_name or slug }}{% endblock %}
+{% block page_title %}Bucket Browser{% endblock %}
+{% block page_sub %}Browse Wasabi storage for <strong>{{ cfg.display_name or slug }}</strong>{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-outline btn-sm" onclick="reload()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  Refresh
+</button>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* ── Bucket browser layout ────────────────────────────── */
+  .bb-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .bb-bucket-switcher {
+    display: flex; gap: 0; border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .bb-bucket-btn {
+    padding: 6px 14px; font-size: 12.5px; font-weight: 500;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted-foreground); font-family: inherit;
+    transition: background .12s, color .12s;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .bb-bucket-btn:hover { background: var(--accent); color: var(--foreground); }
+  .bb-bucket-btn.active { background: var(--primary); color: var(--primary-foreground); }
+  .bb-bucket-btn svg { width: 13px; height: 13px; }
+
+  .bb-search {
+    margin-left: auto;
+    position: relative; display: flex; align-items: center;
+  }
+  .bb-search input {
+    width: 220px; padding: 6px 11px 6px 32px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 13px; background: oklch(0.15 0.006 265);
+    color: var(--foreground); font-family: inherit; outline: none;
+  }
+  .bb-search input:focus { border-color: var(--primary); }
+  .bb-search svg {
+    position: absolute; left: 9px; width: 14px; height: 14px;
+    color: var(--muted-foreground); pointer-events: none;
+  }
+
+  /* Breadcrumb */
+  .bb-breadcrumb {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+    font-size: 13px; margin-bottom: 14px;
+    padding: 8px 12px; background: var(--muted); border-radius: var(--radius);
+    border: 1px solid var(--border);
+  }
+  .bb-breadcrumb-item {
+    display: flex; align-items: center; gap: 4px;
+    color: var(--muted-foreground);
+  }
+  .bb-breadcrumb-item a {
+    color: var(--primary); text-decoration: none; font-weight: 500;
+  }
+  .bb-breadcrumb-item a:hover { text-decoration: underline; }
+  .bb-breadcrumb-item.current { color: var(--foreground); font-weight: 500; }
+  .bb-breadcrumb-sep { color: var(--muted-foreground); margin: 0 2px; }
+
+  /* Listing table */
+  .bb-row-folder { cursor: pointer; }
+  .bb-row-folder:hover { background: color-mix(in oklch, var(--primary) 8%, transparent) !important; }
+  .bb-name-cell { display: flex; align-items: center; gap: 9px; }
+  .bb-icon { flex-shrink: 0; }
+  .bb-icon svg { width: 16px; height: 16px; }
+  .bb-folder-icon { color: oklch(0.78 0.18 70); }
+  .bb-file-icon   { color: var(--muted-foreground); }
+
+  /* Stats bar */
+  .bb-stats {
+    display: flex; gap: 20px; font-size: 12px; color: var(--muted-foreground);
+    padding: 8px 12px; background: var(--muted); border-radius: var(--radius);
+    border: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .bb-stats strong { color: var(--foreground); }
+
+  /* Empty / error states */
+  .bb-empty {
+    text-align: center; padding: 60px 20px;
+    color: var(--muted-foreground); font-size: 13.5px;
+  }
+  .bb-empty svg { width: 40px; height: 40px; margin-bottom: 12px; opacity: 0.45; }
+
+  .bb-loading {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 60px 0; color: var(--muted-foreground); font-size: 13.5px;
+  }
+  .bb-spinner {
+    width: 20px; height: 20px; border: 2px solid var(--border);
+    border-top-color: var(--primary); border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .bb-not-configured {
+    border: 1px solid var(--border); border-radius: calc(var(--radius)*2);
+    padding: 40px; text-align: center; max-width: 480px;
+  }
+  .bb-not-configured svg { width: 36px; height: 36px; color: var(--muted-foreground); margin-bottom: 12px; }
+</style>
+
+{% if not has_offload and not has_backup %}
+<div class="bb-not-configured">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+  <div class="page-title" style="font-size:16px; margin-bottom:8px">Wasabi not configured</div>
+  <p class="text-muted" style="font-size:13px; margin-bottom:18px">Configure Wasabi credentials in tenant settings to enable the bucket browser.</p>
+  <a href="{{ url_for('tenant_settings', slug=slug) }}" class="btn btn-primary btn-sm">Go to Settings</a>
+</div>
+{% else %}
+
+<!-- Toolbar -->
+<div class="bb-toolbar">
+  <div class="bb-bucket-switcher" id="bucketSwitcher">
+    {% if has_offload %}
+    <button class="bb-bucket-btn active" id="btnOffload" onclick="switchBucket('offload')" title="Attachment / inline offload bucket">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Offload &nbsp;<span class="badge badge-secondary" style="font-size:10px">{{ cfg.wasabi_bucket_name }}</span>
+    </button>
+    {% endif %}
+    {% if has_backup %}
+    <button class="bb-bucket-btn {% if not has_offload %}active{% endif %}" id="btnBackup" onclick="switchBucket('backup')" title="Ticket-backup bucket">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Backup &nbsp;<span class="badge badge-secondary" style="font-size:10px">{{ cfg.ticket_backup_bucket }}</span>
+    </button>
+    {% endif %}
+  </div>
+
+  <div class="bb-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="text" id="searchInput" placeholder="Filter files…" oninput="filterRows(this.value)">
+  </div>
+</div>
+
+<!-- Breadcrumb -->
+<div class="bb-breadcrumb" id="breadcrumb"></div>
+
+<!-- Stats bar -->
+<div class="bb-stats" id="statsBar" style="display:none">
+  <span>Folders: <strong id="statFolders">0</strong></span>
+  <span>Files: <strong id="statFiles">0</strong></span>
+  <span>Total size: <strong id="statSize">—</strong></span>
+</div>
+
+<!-- Listing -->
+<div class="card" style="padding:0; overflow:hidden;">
+  <div id="listingWrap">
+    <div class="bb-loading" id="loadingState">
+      <div class="bb-spinner"></div>
+      Loading bucket…
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const SLUG        = {{ slug | tojson }};
+  const HAS_OFFLOAD = {{ has_offload | tojson }};
+  const HAS_BACKUP  = {{ has_backup  | tojson }};
+
+  let currentBucket = HAS_OFFLOAD ? 'offload' : 'backup';
+  let currentPrefix = '';
+  let allRows       = [];   // flat array for filter
+
+  /* ── Bucket switcher ───────────────────────────────────── */
+  window.switchBucket = function (type) {
+    currentBucket = type;
+    currentPrefix = '';
+    document.querySelectorAll('.bb-bucket-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById(type === 'offload' ? 'btnOffload' : 'btnBackup');
+    if (btn) btn.classList.add('active');
+    document.getElementById('searchInput').value = '';
+    load('');
+  };
+
+  /* ── Load a prefix ─────────────────────────────────────── */
+  window.load = function (prefix) {
+    currentPrefix = prefix;
+    showLoading();
+    updateBreadcrumb(prefix);
+
+    const url = `/api/t/${encodeURIComponent(SLUG)}/bucket/list`
+              + `?prefix=${encodeURIComponent(prefix)}`
+              + `&bucket_type=${encodeURIComponent(currentBucket)}`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(render)
+      .catch(err => showError(String(err)));
+  };
+
+  /* ── Render ─────────────────────────────────────────────── */
+  function render (data) {
+    if (data.error) { showError(data.error); return; }
+
+    allRows = [];
+    const wrap = document.getElementById('listingWrap');
+
+    if (!data.folders.length && !data.files.length) {
+      wrap.innerHTML = `<div class="bb-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+        <div>This folder is empty</div></div>`;
+      updateStats(0, 0, 0);
+      return;
+    }
+
+    let totalSize = 0;
+    let html = `<div class="table-wrap" style="border:none; border-radius:0;">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:55%">Name</th>
+            <th style="width:15%">Size</th>
+            <th style="width:20%">Last Modified</th>
+            <th style="width:10%; text-align:right">Action</th>
+          </tr>
+        </thead>
+        <tbody id="listingBody">`;
+
+    // Up directory row
+    if (currentPrefix) {
+      const parent = currentPrefix.replace(/[^/]+\/$/, '');
+      html += `<tr class="bb-row-folder" onclick="load(${JSON.stringify(parent)})" data-name=".." data-type="folder">
+        <td><div class="bb-name-cell"><span class="bb-icon bb-folder-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </span><span style="color:var(--muted-foreground)">.. (up)</span></div></td>
+        <td></td><td></td><td></td></tr>`;
+    }
+
+    for (const folder of data.folders) {
+      allRows.push({ type: 'folder', name: folder.name, prefix: folder.prefix });
+      html += `<tr class="bb-row-folder" onclick="load(${JSON.stringify(folder.prefix)})" data-name="${esc(folder.name)}" data-type="folder">
+        <td><div class="bb-name-cell">
+          <span class="bb-icon bb-folder-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </span>
+          <span>${esc(folder.name)}/</span>
+        </div></td>
+        <td><span class="text-muted">—</span></td>
+        <td><span class="text-muted">—</span></td>
+        <td style="text-align:right"></td>
+      </tr>`;
+    }
+
+    for (const file of data.files) {
+      totalSize += file.size || 0;
+      allRows.push({ type: 'file', name: file.name, key: file.key, size_human: file.size_human, last_modified: file.last_modified });
+      const safeKey = JSON.stringify(file.key);
+      html += `<tr data-name="${esc(file.name)}" data-type="file">
+        <td><div class="bb-name-cell">
+          <span class="bb-icon bb-file-icon">
+            ${fileIcon(file.name)}
+          </span>
+          <span style="word-break:break-all">${esc(file.name)}</span>
+        </div></td>
+        <td><span class="text-muted" style="font-size:12.5px">${esc(file.size_human)}</span></td>
+        <td><span class="text-muted" style="font-size:12px">${esc(file.last_modified || '—')}</span></td>
+        <td style="text-align:right">
+          <button class="btn btn-outline btn-xs" onclick="downloadFile(${safeKey})" title="Download (presigned URL)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+        </td>
+      </tr>`;
+    }
+
+    html += `</tbody></table></div>`;
+    wrap.innerHTML = html;
+    updateStats(data.folders.length, data.files.length, totalSize);
+  }
+
+  /* ── Download via presigned URL ────────────────────────── */
+  window.downloadFile = function (key) {
+    const url = `/api/t/${encodeURIComponent(SLUG)}/bucket/presign`
+              + `?key=${encodeURIComponent(key)}`
+              + `&bucket_type=${encodeURIComponent(currentBucket)}`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert('Error: ' + data.error); return; }
+        const a = document.createElement('a');
+        a.href = data.url;
+        a.download = key.split('/').pop();
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      })
+      .catch(err => alert('Error: ' + err));
+  };
+
+  /* ── Filter rows ────────────────────────────────────────── */
+  window.filterRows = function (q) {
+    q = q.toLowerCase().trim();
+    const rows = document.querySelectorAll('#listingBody tr[data-name]');
+    rows.forEach(row => {
+      const name = (row.dataset.name || '').toLowerCase();
+      row.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+  };
+
+  /* ── Breadcrumb ─────────────────────────────────────────── */
+  function updateBreadcrumb (prefix) {
+    const bc   = document.getElementById('breadcrumb');
+    let html   = `<span class="bb-breadcrumb-item"><a onclick="load('')" href="#" style="display:flex;align-items:center;gap:5px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      root
+    </a></span>`;
+
+    if (prefix) {
+      const parts = prefix.replace(/\/$/, '').split('/');
+      let cumulative = '';
+      parts.forEach((part, i) => {
+        cumulative += part + '/';
+        const isCurrent = i === parts.length - 1;
+        const captured  = cumulative;
+        html += `<span class="bb-breadcrumb-sep">/</span>`;
+        if (isCurrent) {
+          html += `<span class="bb-breadcrumb-item current">${esc(part)}</span>`;
+        } else {
+          html += `<span class="bb-breadcrumb-item"><a onclick="load(${JSON.stringify(captured)})" href="#">${esc(part)}</a></span>`;
+        }
+      });
+    }
+
+    bc.innerHTML = html;
+  }
+
+  /* ── Stats bar ──────────────────────────────────────────── */
+  function updateStats (folders, files, totalBytes) {
+    const bar = document.getElementById('statsBar');
+    bar.style.display = 'flex';
+    document.getElementById('statFolders').textContent = folders;
+    document.getElementById('statFiles').textContent   = files;
+    document.getElementById('statSize').textContent    = humanSize(totalBytes);
+  }
+
+  /* ── Helpers ────────────────────────────────────────────── */
+  window.reload = function () { load(currentPrefix); };
+
+  function showLoading () {
+    document.getElementById('listingWrap').innerHTML =
+      `<div class="bb-loading"><div class="bb-spinner"></div>Loading…</div>`;
+  }
+
+  function showError (msg) {
+    document.getElementById('listingWrap').innerHTML =
+      `<div class="bb-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <div style="color:var(--destructive);font-weight:600;margin-bottom:6px;">Error</div>
+        <div style="font-size:12.5px">${esc(msg)}</div>
+      </div>`;
+  }
+
+  function esc (s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function humanSize (bytes) {
+    if (bytes === 0) return '0 B';
+    const units = ['B','KB','MB','GB','TB'];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return bytes.toFixed(1) + ' ' + units[i];
+  }
+
+  function fileIcon (name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (['jpg','jpeg','png','gif','webp','svg','bmp'].includes(ext)) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+    }
+    if (['pdf'].includes(ext)) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+    }
+    if (['zip','gz','tar','7z','rar'].includes(ext)) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/><polyline points="12 12 12 22"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>`;
+    }
+    if (['json','csv','xml','txt','log'].includes(ext)) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`;
+    }
+    // Generic file
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  }
+
+  // Kick off initial load
+  load('');
+})();
+</script>
+{% endif %}
+{% endblock %}

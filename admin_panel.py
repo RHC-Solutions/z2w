@@ -845,6 +845,135 @@ def tenant_settings(slug):
     return render_template('tenant_settings.html', cfg=cfg, slug=slug)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BUCKET BROWSER  —  /t/<slug>/bucket
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/t/<slug>/bucket')
+@login_required
+def tenant_bucket_browser(slug):
+    """Storage / bucket browser page for a tenant."""
+    from flask import g
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return f'Tenant "{slug}" not found', 404
+    g.tenant_slug = slug
+    g.tenant_cfg = cfg
+
+    # Determine which buckets are configured
+    has_offload = bool(cfg.wasabi_access_key and cfg.wasabi_secret_key and cfg.wasabi_bucket_name)
+    has_backup  = bool(cfg.ticket_backup_endpoint and cfg.ticket_backup_bucket and
+                       cfg.wasabi_access_key and cfg.wasabi_secret_key)
+
+    return render_template(
+        'bucket_browser.html',
+        cfg=cfg,
+        slug=slug,
+        has_offload=has_offload,
+        has_backup=has_backup,
+    )
+
+
+@app.route('/api/t/<slug>/bucket/list')
+@login_required
+def api_bucket_list(slug):
+    """
+    JSON: list folders + files at a given prefix.
+
+    Query params:
+        prefix      — S3 prefix (folder path), default ''
+        bucket_type — 'offload' or 'backup', default 'offload'
+    """
+    from tenant_manager import get_tenant_config
+    from wasabi_client import WasabiClient
+
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    prefix      = request.args.get('prefix', '')
+    bucket_type = request.args.get('bucket_type', 'offload')
+
+    try:
+        if bucket_type == 'backup':
+            endpoint    = cfg.ticket_backup_endpoint or cfg.wasabi_endpoint
+            bucket_name = cfg.ticket_backup_bucket
+        else:
+            endpoint    = cfg.wasabi_endpoint
+            bucket_name = cfg.wasabi_bucket_name
+
+        if not bucket_name:
+            return jsonify({'error': 'Bucket not configured', 'folders': [], 'files': []}), 200
+
+        ws = WasabiClient(
+            endpoint    = endpoint,
+            access_key  = cfg.wasabi_access_key,
+            secret_key  = cfg.wasabi_secret_key,
+            bucket_name = bucket_name,
+        )
+        result = ws.list_objects(prefix=prefix)
+
+        # Serialise datetimes for JSON
+        for f in result['files']:
+            if f['last_modified']:
+                f['last_modified'] = f['last_modified'].strftime('%Y-%m-%d %H:%M UTC')
+
+        result['prefix']      = prefix
+        result['bucket_name'] = bucket_name
+        result['bucket_type'] = bucket_type
+        return jsonify(result)
+
+    except Exception as exc:
+        logger.exception('bucket list error for %s', slug)
+        return jsonify({'error': str(exc), 'folders': [], 'files': []}), 200
+
+
+@app.route('/api/t/<slug>/bucket/presign')
+@login_required
+def api_bucket_presign(slug):
+    """
+    Return a short-lived presigned URL for a given key.
+
+    Query params:
+        key         — S3 key
+        bucket_type — 'offload' or 'backup'
+    """
+    from tenant_manager import get_tenant_config
+    from wasabi_client import WasabiClient
+
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    key         = request.args.get('key', '').strip()
+    bucket_type = request.args.get('bucket_type', 'offload')
+
+    if not key:
+        return jsonify({'error': 'No key provided'}), 400
+
+    try:
+        if bucket_type == 'backup':
+            endpoint    = cfg.ticket_backup_endpoint or cfg.wasabi_endpoint
+            bucket_name = cfg.ticket_backup_bucket
+        else:
+            endpoint    = cfg.wasabi_endpoint
+            bucket_name = cfg.wasabi_bucket_name
+
+        ws = WasabiClient(
+            endpoint    = endpoint,
+            access_key  = cfg.wasabi_access_key,
+            secret_key  = cfg.wasabi_secret_key,
+            bucket_name = bucket_name,
+        )
+        url = ws.presign_url(key, expires_in=3600)
+        return jsonify({'url': url})
+
+    except Exception as exc:
+        logger.exception('presign error for %s key=%s', slug, key)
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/')
 @app.route('/dashboard')
 @login_required
