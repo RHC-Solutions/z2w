@@ -280,6 +280,7 @@ class TicketBackupManager:
 
                             attachment_manifest.append(attachment_row)
 
+
                     export_doc = self._build_export_document(ticket, comments, attachment_manifest)
                     json_blob = json.dumps(export_doc, ensure_ascii=False, default=str).encode('utf-8')
                     json_key = f"{date_folder}/{ticket_id}_ticket.json"
@@ -291,6 +292,45 @@ class TicketBackupManager:
                     )
                     files_uploaded += 1
                     bytes_uploaded += len(json_blob)
+
+                    # HTML export
+                    html_key = f"{date_folder}/{ticket_id}_ticket.html"
+                    html_blob = self._build_ticket_html(ticket, comments, attachment_manifest).encode('utf-8')
+                    wasabi.s3_client.put_object(
+                        Bucket=wasabi.bucket_name,
+                        Key=html_key,
+                        Body=html_blob,
+                        ContentType='text/html',
+                    )
+                    files_uploaded += 1
+                    bytes_uploaded += len(html_blob)
+    def _build_ticket_html(self, ticket, comments, attachments):
+        ticket_id = ticket.get('id', 'Unknown')
+        subject = ticket.get('subject', '')
+        requester = ticket.get('requester_id', '')
+        created = ticket.get('created_at', '')
+        status = ticket.get('status', '')
+        priority = ticket.get('priority', '')
+        html = [
+            f"<html><head><meta charset='utf-8'><title>Ticket #{ticket_id}</title></head><body>",
+            f"<h2>Ticket #{ticket_id}: {subject}</h2>",
+            f"<p><b>Status:</b> {status} &nbsp; <b>Priority:</b> {priority} &nbsp; <b>Requester:</b> {requester} &nbsp; <b>Created:</b> {created}</p>",
+            "<hr>"
+        ]
+        html.append("<h3>Comments:</h3>")
+        for c in comments:
+            author = c.get('author_id', '')
+            created = c.get('created_at', '')
+            body = c.get('body', '') or c.get('html_body', '')
+            html.append(f"<div style='margin-bottom:18px'><b>Author:</b> {author} &nbsp; <b>Created:</b> {created}<br><div style='margin:8px 0;padding:8px;background:#f6f6f6;border-radius:6px'>{body}</div></div>")
+        html.append("<hr><h3>Attachments:</h3>")
+        for att in attachments:
+            fname = att.get('file_name', '')
+            size = att.get('size', 0)
+            s3_key = att.get('s3_key', '')
+            html.append(f"<div><b>{fname}</b> ({size} bytes) &mdash; S3 Key: {s3_key}</div>")
+        html.append("</body></html>")
+        return '\n'.join(html)
 
                     self._upsert_item(
                         db=db,
