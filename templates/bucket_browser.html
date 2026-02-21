@@ -228,7 +228,7 @@
     // Up directory row
     if (currentPrefix) {
       const parent = currentPrefix.replace(/[^/]+\/$/, '');
-      html += `<tr class="bb-row-folder" onclick="load(${JSON.stringify(parent)})" data-name=".." data-type="folder">
+      html += `<tr class="bb-row-folder" data-nav-prefix="${esc(parent)}" data-name=".." data-type="folder">
         <td><div class="bb-name-cell"><span class="bb-icon bb-folder-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         </span><span style="color:var(--muted-foreground)">.. (up)</span></div></td>
@@ -237,7 +237,7 @@
 
     for (const folder of data.folders) {
       allRows.push({ type: 'folder', name: folder.name, prefix: folder.prefix });
-      html += `<tr class="bb-row-folder" onclick="load(${JSON.stringify(folder.prefix)})" data-name="${esc(folder.name)}" data-type="folder">
+      html += `<tr class="bb-row-folder" data-nav-prefix="${esc(folder.prefix)}" data-name="${esc(folder.name)}" data-type="folder">
         <td><div class="bb-name-cell">
           <span class="bb-icon bb-folder-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -274,6 +274,18 @@
     html += `</tbody></table></div>`;
     wrap.innerHTML = html;
     updateStats(data.folders.length, data.files.length, totalSize);
+
+    // Event delegation for folder navigation (inline onclick stripped by browser from innerHTML)
+    const tbody = wrap.querySelector('#listingBody');
+    if (tbody) {
+      tbody.addEventListener('click', function(e) {
+        const tr = e.target.closest('tr[data-nav-prefix]');
+        if (!tr) return;
+        // Don't navigate if user clicked the download button
+        if (e.target.closest('button')) return;
+        load(tr.getAttribute('data-nav-prefix'));
+      });
+    }
   }
 
   /* ── Download via presigned URL ────────────────────────── */

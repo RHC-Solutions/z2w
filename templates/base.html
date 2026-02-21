@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}z2w — Zendesk Offloader{% endblock %}</title>
+  <title>{% block title %}Z2W{% endblock %}</title>
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -393,8 +393,8 @@
     <div class="sidebar-header">
       <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w" class="sidebar-logo">
       <div>
-        <div class="sidebar-title">Zendesk Offloader</div>
-        <div class="sidebar-subtitle">z2w · RHC Solutions</div>
+        <div class="sidebar-title">Z2W</div>
+        <div class="sidebar-subtitle"><a href="https://rhcsolutions.ie" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">RHC Solutions</a></div>
       </div>
     </div>
     {% if session.get('user_email') %}
