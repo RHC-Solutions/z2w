@@ -461,10 +461,13 @@ def tenants_overview():
             'is_active': t.is_active,
             'created_at': t.created_at,
             'configured': cfg.is_configured if cfg else False,
+            'zendesk_subdomain': (cfg.zendesk_subdomain or t.slug) if cfg else t.slug,
+            'wasabi_bucket': cfg.wasabi_bucket_name if cfg else '',
             'tickets_processed': 0,
             'tickets_backed_up': 0,
             'last_offload': None,
             'last_backup': None,
+            'last_backup_run': None,   # full TicketBackupRun row
             'errors_today': 0,
             'storage_bytes': 0,
             'red_flags': [],
@@ -483,6 +486,15 @@ def tenants_overview():
             last_bak = tdb.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
             if last_bak:
                 card['last_backup'] = last_bak.run_date
+                card['last_backup_run'] = {
+                    'run_date': last_bak.run_date,
+                    'tickets_scanned': last_bak.tickets_scanned or 0,
+                    'tickets_backed_up': last_bak.tickets_backed_up or 0,
+                    'files_uploaded': last_bak.files_uploaded or 0,
+                    'bytes_uploaded': last_bak.bytes_uploaded or 0,
+                    'errors_count': last_bak.errors_count or 0,
+                    'status': last_bak.status or 'completed',
+                }
             # Red flags
             from datetime import timedelta
             now = datetime.utcnow()

@@ -4,8 +4,8 @@
 {% block page_sub %}Multi-tenant overview &amp; management{% endblock %}
 
 {% block topbar_actions %}
-<a href="{{ url_for('wizard') }}" class="btn-primary" style="display:inline-flex;align-items:center;gap:6px;padding:.4rem 1rem;background:var(--accent,#6c63ff);color:#fff;border-radius:7px;font-size:.85rem;font-weight:600;text-decoration:none;">
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+<a href="{{ url_for('wizard') }}" class="btn btn-primary btn-sm">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
   Add Tenant
 </a>
 {% endblock %}
@@ -14,117 +14,142 @@
 <style>
 .tenants-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 1.25rem;
-  padding: 1.5rem;
 }
 
 .tenant-card {
-  background: var(--card-bg, #1a1a2e);
-  border: 1px solid var(--border, #2a2a3e);
-  border-radius: 11px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius)*2);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.tenant-card:hover { border-color: #444; box-shadow: 0 4px 20px rgba(0,0,0,.3); }
+.tenant-card:hover { border-color: oklch(0.38 0.008 265); box-shadow: 0 4px 24px rgba(0,0,0,.35); }
 .tenant-card.inactive { opacity: .55; }
 
+/* ── Card header ── */
 .tc-header {
-  padding: .9rem 1.1rem .7rem;
+  padding: .85rem 1rem .75rem;
   display: flex;
   align-items: center;
   gap: .75rem;
-  border-bottom: 1px solid var(--border, #2a2a3e);
+  border-bottom: 1px solid var(--border);
 }
-
 .tc-avatar {
-  width: 38px; height: 38px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #6c63ff 0%, #3b82f6 100%);
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
+  border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
   display: flex; align-items: center; justify-content: center;
-  font-size: 1rem; font-weight: 700; color: #fff;
   flex-shrink: 0;
-  text-transform: uppercase;
+  color: var(--primary);
 }
+.tc-avatar svg { width: 20px; height: 20px; }
 
 .tc-title { flex: 1; min-width: 0; }
-.tc-title h3 { margin: 0; font-size: .95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary, #e0e0e0); }
-.tc-title .slug { font-size: .72rem; color: #888; font-family: monospace; }
+.tc-title h3 {
+  margin: 0 0 2px;
+  font-size: .95rem; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--foreground);
+}
+.tc-title .subdomain {
+  font-size: .72rem; color: var(--muted-foreground);
+  font-family: ui-monospace, monospace;
+  display: flex; align-items: center; gap: 4px;
+}
+.tc-title .subdomain a {
+  color: var(--primary); text-decoration: none;
+}
+.tc-title .subdomain a:hover { text-decoration: underline; }
 
-.badge-active   { background: #1a2a1a; color: #4caf50; border: 1px solid #2a4a2a; }
-.badge-inactive { background: #2a1a1a; color: #f44336; border: 1px solid #4a2a2a; }
-.badge-uncfg    { background: #2a2a1a; color: #ff9800; border: 1px solid #4a3a1a; }
-.status-badge { font-size: .68rem; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+.status-badge {
+  font-size: .68rem; padding: 2px 9px; border-radius: 999px;
+  font-weight: 600; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge-active   { background: color-mix(in oklch,var(--success) 15%,transparent); color: oklch(0.72 0.16 162); border-color: color-mix(in oklch,var(--success) 28%,transparent); }
+.badge-inactive { background: color-mix(in oklch,var(--destructive) 15%,transparent); color: oklch(0.72 0.22 27); border-color: color-mix(in oklch,var(--destructive) 28%,transparent); }
+.badge-uncfg    { background: color-mix(in oklch,var(--warning) 15%,transparent); color: oklch(0.82 0.16 70); border-color: color-mix(in oklch,var(--warning) 28%,transparent); }
 
+/* ── Stats row ── */
 .tc-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0;
-  border-bottom: 1px solid var(--border, #2a2a3e);
+  border-bottom: 1px solid var(--border);
 }
 .tc-stat {
-  padding: .6rem .5rem;
+  padding: .65rem .5rem;
   text-align: center;
-  border-right: 1px solid var(--border, #2a2a3e);
+  border-right: 1px solid var(--border);
 }
 .tc-stat:last-child { border-right: none; }
-.tc-stat .value { font-size: 1.1rem; font-weight: 700; color: var(--text-primary, #e0e0e0); }
-.tc-stat .label { font-size: .65rem; color: #888; margin-top: 1px; }
+.tc-stat .value { font-size: 1.05rem; font-weight: 700; color: var(--foreground); }
+.tc-stat .value.warn { color: var(--warning); }
+.tc-stat .value.danger { color: var(--destructive); }
+.tc-stat .label { font-size: .65rem; color: var(--muted-foreground); margin-top: 2px; text-transform: uppercase; letter-spacing: .03em; }
 
+/* ── Last backup run ── */
+.tc-backup-run {
+  padding: .6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: .72rem;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.tc-backup-run .run-title {
+  font-size: .7rem; font-weight: 600;
+  color: var(--muted-foreground);
+  text-transform: uppercase; letter-spacing: .04em;
+  margin-bottom: 3px;
+}
+.tc-backup-run .run-line {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.run-status {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: .68rem; font-weight: 600; padding: 1px 7px;
+  border-radius: 999px; border: 1px solid transparent;
+}
+.run-ok      { background: color-mix(in oklch,var(--success) 15%,transparent); color: oklch(0.72 0.16 162); border-color: color-mix(in oklch,var(--success) 28%,transparent); }
+.run-warn    { background: color-mix(in oklch,var(--warning) 15%,transparent); color: oklch(0.82 0.16 70); border-color: color-mix(in oklch,var(--warning) 28%,transparent); }
+.run-err     { background: color-mix(in oklch,var(--destructive) 15%,transparent); color: oklch(0.72 0.22 27); border-color: color-mix(in oklch,var(--destructive) 28%,transparent); }
+.run-dot     { width: 5px; height: 5px; border-radius: 50%; background: var(--muted-foreground); display: inline-block; margin: 0 2px; vertical-align: middle; }
+
+/* ── Flags ── */
 .tc-flags {
-  padding: .5rem 1rem;
-  min-height: 28px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: .35rem;
-  align-items: center;
+  padding: .45rem 1rem;
+  min-height: 26px;
+  display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
+  border-bottom: 1px solid var(--border);
 }
 .flag-pill {
-  background: #2a1a1a;
-  color: #f44336;
-  border: 1px solid #4a2a2a;
-  font-size: .68rem;
-  padding: 1px 8px;
-  border-radius: 20px;
-  font-weight: 600;
+  background: color-mix(in oklch,var(--destructive) 12%,transparent);
+  color: oklch(0.72 0.22 27);
+  border: 1px solid color-mix(in oklch,var(--destructive) 25%,transparent);
+  font-size: .67rem; padding: 1px 8px; border-radius: 999px; font-weight: 600;
 }
-.no-flags { font-size: .72rem; color: #4caf50; }
+.no-flags { font-size: .72rem; color: oklch(0.65 0.15 162); }
 
+/* ── Footer ── */
 .tc-footer {
-  padding: .7rem 1rem;
-  display: flex;
-  gap: .5rem;
-  align-items: center;
-  background: rgba(0,0,0,.15);
+  padding: .6rem 1rem;
+  display: flex; gap: .5rem; align-items: center;
+  background: oklch(0.14 0.008 265);
 }
-.tc-footer .meta { font-size: .68rem; color: #666; flex: 1; }
-
-.btn-sm {
-  padding: .28rem .65rem;
-  font-size: .75rem;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-  font-weight: 600;
-  text-decoration: none;
-  display: inline-flex; align-items: center; gap: 4px;
-  transition: opacity .15s;
-}
-.btn-sm:hover { opacity: .8; }
-.btn-open   { background: var(--accent, #6c63ff); color: #fff; }
-.btn-sett   { background: #2a2a3e; color: #aaa; }
-.btn-toggle { background: transparent; color: #888; border: 1px solid #333; }
+.tc-footer .meta { font-size: .68rem; color: var(--muted-foreground); flex: 1; }
 
 .empty-state {
   grid-column: 1 / -1;
   text-align: center;
   padding: 4rem 2rem;
-  color: #666;
+  color: var(--muted-foreground);
 }
-.empty-state svg { width: 48px; height: 48px; margin: 0 auto 1rem; display: block; color: #333; }
-.empty-state h3 { color: #888; margin: 0 0 .5rem; }
+.empty-state svg { width: 48px; height: 48px; margin: 0 auto 1rem; display: block; color: var(--border); }
+.empty-state h3 { color: var(--foreground); margin: 0 0 .5rem; }
 .empty-state p { font-size: .85rem; margin: 0 0 1.5rem; }
 </style>
 
@@ -134,22 +159,39 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
       <circle cx="9" cy="7" r="4"/>
-      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
     </svg>
     <h3>No tenants yet</h3>
     <p>Use the Add Tenant wizard to connect your first Zendesk account.</p>
-    <a href="{{ url_for('wizard') }}" class="btn-sm btn-open">Add First Tenant</a>
+    <a href="{{ url_for('wizard') }}" class="btn btn-primary btn-sm">Add First Tenant</a>
   </div>
   {% endif %}
 
   {% for c in cards %}
+  {% set br = c.last_backup_run %}
   <div class="tenant-card {% if not c.is_active %}inactive{% endif %}">
+
+    {# ── Header ── #}
     <div class="tc-header">
-      <div class="tc-avatar">{{ c.display_name[0] }}</div>
+      <div class="tc-avatar">
+        {# Zendesk headset icon #}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+          <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
+          <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+        </svg>
+      </div>
       <div class="tc-title">
         <h3>{{ c.display_name }}</h3>
-        <div class="slug">{{ c.slug }}.zendesk.com</div>
+        <div class="subdomain">
+          <a href="https://{{ c.zendesk_subdomain }}.zendesk.com" target="_blank" rel="noopener">
+            {{ c.zendesk_subdomain }}.zendesk.com
+          </a>
+          {% if c.wasabi_bucket %}
+          <span style="color:var(--border)">·</span>
+          <span title="Wasabi bucket">{{ c.wasabi_bucket }}</span>
+          {% endif %}
+        </div>
       </div>
       {% if not c.configured %}
         <span class="status-badge badge-uncfg">Not Configured</span>
@@ -160,6 +202,7 @@
       {% endif %}
     </div>
 
+    {# ── Stats ── #}
     <div class="tc-stats">
       <div class="tc-stat">
         <div class="value">{{ '{:,}'.format(c.tickets_processed) }}</div>
@@ -170,11 +213,43 @@
         <div class="label">Backed Up</div>
       </div>
       <div class="tc-stat">
-        <div class="value {% if c.errors_today > 5 %}text-danger{% endif %}">{{ c.errors_today }}</div>
+        <div class="value {% if c.errors_today > 5 %}danger{% elif c.errors_today > 0 %}warn{% endif %}">
+          {{ c.errors_today }}
+        </div>
         <div class="label">Errors</div>
       </div>
     </div>
 
+    {# ── Last backup run ── #}
+    <div class="tc-backup-run">
+      <div class="run-title">Last Backup Run</div>
+      {% if br %}
+        {% set is_err = br.errors_count > 0 %}
+        {% set status_clean = br.status | replace('_', ' ') %}
+        <div class="run-line">
+          <span>{{ br.run_date.strftime('%d-%m-%Y %H:%M') }} UTC</span>
+          <span class="run-dot"></span>
+          <span>scanned {{ '{:,}'.format(br.tickets_scanned) }}</span>
+          <span class="run-dot"></span>
+          <span>backed up {{ '{:,}'.format(br.tickets_backed_up) }}</span>
+          <span class="run-dot"></span>
+          <span>{{ '{:,}'.format(br.files_uploaded) }} files
+            ({{ "%.1f"|format(br.bytes_uploaded / 1048576) }} MB)</span>
+          {% if is_err %}
+          <span class="run-dot"></span>
+          <span style="color:oklch(0.72 0.22 27)">{{ br.errors_count }} error{{ 's' if br.errors_count != 1 }}</span>
+          {% endif %}
+          <span class="run-dot"></span>
+          <span class="run-status {% if is_err %}run-warn{% else %}run-ok{% endif %}">
+            {{ status_clean }}
+          </span>
+        </div>
+      {% else %}
+        <span style="color:var(--muted-foreground);font-style:italic">No backup runs yet</span>
+      {% endif %}
+    </div>
+
+    {# ── Red flags ── #}
     <div class="tc-flags">
       {% if c.red_flags %}
         {% for flag in c.red_flags %}
@@ -185,13 +260,14 @@
       {% endif %}
     </div>
 
+    {# ── Footer ── #}
     <div class="tc-footer">
       <div class="meta">
-        {% if c.last_offload %}Last offload: {{ c.last_offload.strftime('%b %d %H:%M') }}{% else %}Never offloaded{% endif %}
+        {% if c.last_offload %}Last offload: {{ c.last_offload.strftime('%d %b %H:%M') }}{% else %}Never offloaded{% endif %}
       </div>
-      <a href="{{ url_for('tenant_dashboard', slug=c.slug) }}" class="btn-sm btn-open">Open</a>
-      <a href="{{ url_for('tenant_settings', slug=c.slug) }}" class="btn-sm btn-sett">Settings</a>
-      <button class="btn-sm btn-toggle" onclick="toggleTenant('{{ c.slug }}', this)">
+      <a href="{{ url_for('tenant_dashboard', slug=c.slug) }}" class="btn btn-primary btn-xs">Open</a>
+      <a href="{{ url_for('tenant_settings', slug=c.slug) }}" class="btn btn-secondary btn-xs">Settings</a>
+      <button class="btn btn-outline btn-xs" onclick="toggleTenant('{{ c.slug }}', this)">
         {{ 'Disable' if c.is_active else 'Enable' }}
       </button>
     </div>
