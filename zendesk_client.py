@@ -15,10 +15,10 @@ logger = logging.getLogger('zendesk_offloader')
 class ZendeskClient:
     """Client for interacting with Zendesk API"""
     
-    def __init__(self):
-        self.subdomain = ZENDESK_SUBDOMAIN
-        self.email = ZENDESK_EMAIL
-        self.api_token = ZENDESK_API_TOKEN
+    def __init__(self, subdomain=None, email=None, api_token=None):
+        self.subdomain = subdomain or ZENDESK_SUBDOMAIN
+        self.email = email or ZENDESK_EMAIL
+        self.api_token = api_token or ZENDESK_API_TOKEN
         self._session = None
         
         # Only set base_url if subdomain is configured

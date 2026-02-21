@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+
+{% block page_title %}Tools{% endblock %}
+{% block page_sub %}Network diagnostics &amp; Wasabi speed test{% endblock %}
+
+{% block content %}
+<style>
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+    gap: 1.5rem;
+    padding: 1.5rem;
+  }
+
+  .tool-card {
+    background: var(--card-bg, #1a1a2e);
+    border: 1px solid var(--border, #2a2a3e);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tool-card-header {
+    padding: 1rem 1.25rem 0.75rem;
+    border-bottom: 1px solid var(--border, #2a2a3e);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .tool-card-header svg {
+    width: 18px;
+    height: 18px;
+    color: var(--accent, #6c63ff);
+    flex-shrink: 0;
+  }
+
+  .tool-card-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .tool-card-body {
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1;
+  }
+
+  .tool-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .tool-row label {
+    font-size: 0.8rem;
+    color: var(--text-muted, #888);
+    min-width: 52px;
+  }
+
+  .tool-input {
+    flex: 1;
+    min-width: 160px;
+    background: var(--input-bg, #12121e);
+    border: 1px solid var(--border, #2a2a3e);
+    border-radius: 6px;
+    color: var(--text-primary, #e0e0e0);
+    font-size: 0.85rem;
+    padding: 0.4rem 0.65rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .tool-input:focus { border-color: var(--accent, #6c63ff); }
+
+  .tool-select {
+    background: var(--input-bg, #12121e);
+    border: 1px solid var(--border, #2a2a3e);
+    border-radius: 6px;
+    color: var(--text-primary, #e0e0e0);
+    font-size: 0.85rem;
+    padding: 0.4rem 0.65rem;
+    outline: none;
+    transition: border-color 0.15s;
+    cursor: pointer;
+  }
+  .tool-select:focus { border-color: var(--accent, #6c63ff); }
+
+  .btn-run {
+    padding: 0.4rem 1rem;
+    background: var(--accent, #6c63ff);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    white-space: nowrap;
+  }
+  .btn-run:hover:not(:disabled) { background: #5a52e8; }
+  .btn-run:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  .btn-clear {
+    padding: 0.4rem 0.75rem;
+    background: transparent;
+    color: var(--text-muted, #888);
+    border: 1px solid var(--border, #2a2a3e);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .btn-clear:hover { color: var(--text-primary, #e0e0e0); border-color: #555; }
+
+  .tool-terminal {
+    background: #0d0d0d;
+    border: 1px solid #222;
+    border-radius: 7px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.78rem;
+    color: #c8f0c8;
+    padding: 0.75rem;
+    min-height: 120px;
+    max-height: 340px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+    position: relative;
+  }
+
+  .tool-terminal .placeholder {
+    color: #444;
+    font-style: italic;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+    margin-left: auto;
+    font-weight: 600;
+  }
+  .status-idle    { background: #1e1e2e; color: #666; }
+  .status-running { background: #1a2a1a; color: #4caf50; }
+  .status-done    { background: #1a1a2a; color: #6c63ff; }
+  .status-error   { background: #2a1a1a; color: #f44336; }
+
+  .spinner {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Speed test bucket tabs */
+  .bucket-tabs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .bucket-tab {
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--border, #2a2a3e);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-muted, #888);
+    transition: all 0.15s;
+  }
+  .bucket-tab:hover { color: var(--text-primary, #e0e0e0); border-color: #555; }
+  .bucket-tab.active { background: var(--accent, #6c63ff); color: #fff; border-color: var(--accent, #6c63ff); }
+
+  .speed-summary {
+    display: none;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .speed-summary.visible { display: grid; }
+  .speed-tile {
+    background: #12121e;
+    border: 1px solid #2a2a3e;
+    border-radius: 7px;
+    padding: 0.6rem 0.5rem;
+    text-align: center;
+  }
+  .speed-tile .label { font-size: 0.68rem; color: #888; margin-bottom: 2px; }
+  .speed-tile .value { font-size: 1.1rem; font-weight: 700; color: #c8f0c8; }
+  .speed-tile .unit  { font-size: 0.68rem; color: #666; }
+</style>
+
+<div class="tools-grid">
+
+  <!-- ── PING ──────────────────────────────────────────────── -->
+  <div class="tool-card">
+    <div class="tool-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><polyline points="12 8 12 12 14 14"/>
+      </svg>
+      <h3>Ping</h3>
+      <span class="status-badge status-idle" id="ping-status">Idle</span>
+    </div>
+    <div class="tool-card-body">
+      <div class="tool-row">
+        <label>Host</label>
+        <input id="ping-host" class="tool-input" type="text" placeholder="e.g. 8.8.8.8 or google.com"
+               onkeydown="if(event.key==='Enter') runPing()">
+        <button class="btn-run" id="ping-run" onclick="runPing()">Run</button>
+        <button class="btn-clear" onclick="clearTool('ping')">Clear</button>
+      </div>
+      <div class="tool-terminal" id="ping-output">
+        <span class="placeholder">Output will appear here…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TRACEROUTE ─────────────────────────────────────────── -->
+  <div class="tool-card">
+    <div class="tool-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      <h3>Traceroute</h3>
+      <span class="status-badge status-idle" id="trace-status">Idle</span>
+    </div>
+    <div class="tool-card-body">
+      <div class="tool-row">
+        <label>Host</label>
+        <input id="trace-host" class="tool-input" type="text" placeholder="e.g. 1.1.1.1 or cloudflare.com"
+               onkeydown="if(event.key==='Enter') runTrace()">
+        <button class="btn-run" id="trace-run" onclick="runTrace()">Run</button>
+        <button class="btn-clear" onclick="clearTool('trace')">Clear</button>
+      </div>
+      <div class="tool-terminal" id="trace-output">
+        <span class="placeholder">Output will appear here…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DNS LOOKUP ─────────────────────────────────────────── -->
+  <div class="tool-card">
+    <div class="tool-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+      </svg>
+      <h3>DNS Lookup</h3>
+      <span class="status-badge status-idle" id="dns-status">Idle</span>
+    </div>
+    <div class="tool-card-body">
+      <div class="tool-row">
+        <label>Domain</label>
+        <input id="dns-host" class="tool-input" type="text" placeholder="e.g. example.com"
+               onkeydown="if(event.key==='Enter') runDns()">
+        <select id="dns-type" class="tool-select">
+          <option value="A">A</option>
+          <option value="AAAA">AAAA</option>
+          <option value="MX">MX</option>
+          <option value="TXT">TXT</option>
+          <option value="NS">NS</option>
+          <option value="CNAME">CNAME</option>
+          <option value="SOA">SOA</option>
+        </select>
+        <button class="btn-run" id="dns-run" onclick="runDns()">Lookup</button>
+        <button class="btn-clear" onclick="clearTool('dns')">Clear</button>
+      </div>
+      <div class="tool-terminal" id="dns-output">
+        <span class="placeholder">Output will appear here…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WASABI SPEED TEST ────────────────────────────────── -->
+  <div class="tool-card" style="grid-column: 1 / -1;">
+    <div class="tool-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+      </svg>
+      <h3>Wasabi Speed Test</h3>
+      <span class="status-badge status-idle" id="speed-status">Idle</span>
+    </div>
+    <div class="tool-card-body">
+      <div class="tool-row" style="align-items: flex-start; gap: 1rem;">
+        <div style="flex:1">
+          <div style="font-size:0.78rem;color:var(--text-muted,#888);margin-bottom:0.4rem;">Select bucket:</div>
+          <div class="bucket-tabs" id="bucket-tabs">
+            {% for b in buckets %}
+            <button class="bucket-tab {% if loop.first %}active{% endif %}"
+                    data-idx="{{ loop.index0 }}"
+                    onclick="selectBucket(this)">
+              {{ b.label }}
+            </button>
+            {% endfor %}
+            {% if not buckets %}
+            <span style="color:#666;font-size:0.8rem;">No buckets configured.</span>
+            {% endif %}
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:1.2rem;">
+          <button class="btn-run" id="speed-run" onclick="runSpeedTest()" {% if not buckets %}disabled{% endif %}>
+            Run Test
+          </button>
+          <button class="btn-clear" onclick="clearTool('speed')">Clear</button>
+        </div>
+      </div>
+
+      <div style="font-size:0.72rem;color:#555;line-height:1.4;">
+        Downloads the Rocky Linux 10 minimal ISO (~1 GB) from the Rocky CDN, uploads it to the selected
+        Wasabi bucket, then downloads it back — reporting throughput for each phase.
+      </div>
+
+      <!-- Speed summary tiles (shown after run) -->
+      <div class="speed-summary" id="speed-summary">
+        <div class="speed-tile">
+          <div class="label">CDN → Server</div>
+          <div class="value" id="speed-cdn">—</div>
+          <div class="unit">MB/s</div>
+        </div>
+        <div class="speed-tile">
+          <div class="label">Server → Wasabi</div>
+          <div class="value" id="speed-up">—</div>
+          <div class="unit">MB/s</div>
+        </div>
+        <div class="speed-tile">
+          <div class="label">Wasabi → Server</div>
+          <div class="value" id="speed-down">—</div>
+          <div class="unit">MB/s</div>
+        </div>
+      </div>
+
+      <div class="tool-terminal" id="speed-output" style="max-height: 420px;">
+        <span class="placeholder">Output will appear here…</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ──────────────────────────────────────────────────────────
+   Shared helpers
+────────────────────────────────────────────────────────── */
+function setStatus(tool, state, label) {
+  const el = document.getElementById(tool + '-status');
+  if (!el) return;
+  el.className = 'status-badge status-' + state;
+  el.innerHTML = state === 'running'
+    ? '<span class="spinner"></span> ' + label
+    : label;
+}
+
+function clearTool(tool) {
+  const out = document.getElementById(tool + '-output');
+  if (out) out.innerHTML = '<span class="placeholder">Output will appear here…</span>';
+  setStatus(tool, 'idle', 'Idle');
+  if (tool === 'speed') {
+    document.getElementById('speed-summary').classList.remove('visible');
+    ['speed-cdn','speed-up','speed-down'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+  }
+}
+
+function appendOutput(id, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  // Remove placeholder on first real text
+  const ph = el.querySelector('.placeholder');
+  if (ph) ph.remove();
+  el.textContent += text;
+  el.scrollTop = el.scrollHeight;
+}
+
+/* Streaming fetch – reads chunked plain-text response line by line */
+async function streamFetch(url, outputId, tool, onDone) {
+  const btn = document.getElementById(tool + '-run');
+  if (btn) btn.disabled = true;
+  setStatus(tool, 'running', 'Running…');
+
+  const el = document.getElementById(outputId);
+  if (el) { el.innerHTML = ''; }
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      appendOutput(outputId, 'HTTP ' + resp.status + ': ' + resp.statusText + '\n');
+      setStatus(tool, 'error', 'Error');
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      appendOutput(outputId, decoder.decode(value, { stream: true }));
+    }
+    setStatus(tool, 'done', 'Done');
+    if (onDone) onDone(el ? el.textContent : '');
+  } catch (err) {
+    appendOutput(outputId, 'Error: ' + err.message + '\n');
+    setStatus(tool, 'error', 'Error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Ping
+────────────────────────────────────────────────────────── */
+function runPing() {
+  const host = document.getElementById('ping-host').value.trim();
+  if (!host) { document.getElementById('ping-host').focus(); return; }
+  streamFetch('/api/tools/ping?host=' + encodeURIComponent(host), 'ping-output', 'ping');
+}
+
+/* ──────────────────────────────────────────────────────────
+   Traceroute
+────────────────────────────────────────────────────────── */
+function runTrace() {
+  const host = document.getElementById('trace-host').value.trim();
+  if (!host) { document.getElementById('trace-host').focus(); return; }
+  streamFetch('/api/tools/traceroute?host=' + encodeURIComponent(host), 'trace-output', 'trace');
+}
+
+/* ──────────────────────────────────────────────────────────
+   DNS
+────────────────────────────────────────────────────────── */
+function runDns() {
+  const host = document.getElementById('dns-host').value.trim();
+  const type = document.getElementById('dns-type').value;
+  if (!host) { document.getElementById('dns-host').focus(); return; }
+  streamFetch(
+    '/api/tools/dns?host=' + encodeURIComponent(host) + '&type=' + encodeURIComponent(type),
+    'dns-output', 'dns'
+  );
+}
+
+/* ──────────────────────────────────────────────────────────
+   Speed test
+────────────────────────────────────────────────────────── */
+let selectedBucketIdx = 0;
+
+function selectBucket(el) {
+  document.querySelectorAll('.bucket-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  selectedBucketIdx = parseInt(el.dataset.idx, 10) || 0;
+}
+
+function runSpeedTest() {
+  streamFetch(
+    '/api/tools/speedtest?bucket=' + selectedBucketIdx,
+    'speed-output', 'speed',
+    parseSummary
+  );
+}
+
+function parseSummary(text) {
+  // Parse "=== Summary ===" block for speed values
+  const cdnMatch   = text.match(/CDN download:\s+([\d.]+)\s+MB\/s/);
+  const upMatch    = text.match(/Wasabi upload:\s+([\d.]+)\s+MB\/s/);
+  const downMatch  = text.match(/Wasabi download:\s+([\d.]+)\s+MB\/s/);
+
+  if (cdnMatch || upMatch || downMatch) {
+    document.getElementById('speed-summary').classList.add('visible');
+    if (cdnMatch)  document.getElementById('speed-cdn').textContent  = cdnMatch[1];
+    if (upMatch)   document.getElementById('speed-up').textContent   = upMatch[1];
+    if (downMatch) document.getElementById('speed-down').textContent = downMatch[1];
+  }
+}
+</script>
+{% endblock %}

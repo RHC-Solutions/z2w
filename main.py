@@ -24,6 +24,14 @@ if __name__ == '__main__':
     # Initialize database
     logger.info("Initializing database...")
     init_db()
+
+    # Bootstrap multi-tenant global.db (creates first tenant from .env if needed)
+    try:
+        from tenant_manager import bootstrap_first_tenant
+        first_slug = bootstrap_first_tenant()
+        logger.info(f"Multi-tenant ready — first tenant: {first_slug}")
+    except Exception as _e:
+        logger.warning(f"bootstrap_first_tenant failed (non-fatal): {_e}")
     
     # Initialize and start scheduler
     logger.info("Starting scheduler...")

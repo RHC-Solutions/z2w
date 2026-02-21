@@ -80,12 +80,59 @@ werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.WARNING)
 werkzeug_logger.addFilter(StaticFileFilter())
 
+# ── Tenant context middleware ─────────────────────────────────────────────────
+from flask import g as _flask_g
+
+@app.before_request
+def _inject_tenant_context():
+    """
+    For /t/<slug>/... routes, set g.tenant_slug so that get_db() automatically
+    uses the correct per-tenant database.  Also attach the full TenantConfig.
+    """
+    from flask import g
+    slug = None
+    # URL-based tenant: /t/{slug}/...
+    if request.path.startswith('/t/'):
+        parts = request.path.split('/')
+        if len(parts) >= 3 and parts[2]:
+            slug = parts[2]
+    if slug:
+        try:
+            from tenant_manager import get_tenant_config
+            cfg = get_tenant_config(slug)
+            if cfg:
+                g.tenant_slug = slug
+                g.tenant_cfg = cfg
+                return
+        except Exception:
+            pass
+    # Fallback: use first active tenant for legacy /dashboard, /tickets etc.
+    if not request.path.startswith(('/login', '/logout', '/static', '/wizard',
+                                    '/api/wizard', '/tenants', '/api/tenants')):
+        try:
+            from tenant_manager import list_tenants
+            active = [t for t in list_tenants() if t.is_active]
+            if active:
+                g.tenant_slug = active[0].slug
+                from tenant_manager import get_tenant_config
+                g.tenant_cfg = get_tenant_config(active[0].slug)
+        except Exception:
+            pass
+    # Always attach all tenants list for sidebar rendering
+    try:
+        from tenant_manager import list_tenants
+        g.all_tenants = list_tenants(active_only=False)
+    except Exception:
+        g.all_tenants = []
+
+
 def init_scheduler():
-    """Initialize scheduler"""
+    """Initialize scheduler (singleton)"""
     global scheduler
     if scheduler is None:
         scheduler = OffloadScheduler()
     return scheduler
+
 
 def _sanitize_for_json(obj):
     """Recursively convert datetime objects to ISO strings for safe JSON serialization."""
@@ -388,6 +435,392 @@ def logout():
     session.clear()
     flash('Logged out', 'success')
     return redirect(url_for('login'))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GLOBAL TENANTS OVERVIEW  —  /tenants
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/tenants')
+@login_required
+def tenants_overview():
+    """Global tenant management page."""
+    from tenant_manager import list_tenants, get_tenant_config, get_tenant_db_session
+    from sqlalchemy import func as sqlfunc
+
+    tenant_rows = list_tenants()
+    cards = []
+    for t in tenant_rows:
+        cfg = get_tenant_config(t.slug)
+        card = {
+            'slug': t.slug,
+            'display_name': t.display_name or t.slug,
+            'is_active': t.is_active,
+            'created_at': t.created_at,
+            'configured': cfg.is_configured if cfg else False,
+            'tickets_processed': 0,
+            'tickets_backed_up': 0,
+            'last_offload': None,
+            'last_backup': None,
+            'errors_today': 0,
+            'storage_bytes': 0,
+            'red_flags': [],
+        }
+        # Pull stats from per-tenant DB (best-effort)
+        try:
+            tdb = get_tenant_db_session(t.slug)
+            from database import ProcessedTicket, OffloadLog, TicketBackupItem, TicketBackupRun
+            card['tickets_processed'] = tdb.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
+            card['tickets_backed_up'] = tdb.query(sqlfunc.count(TicketBackupItem.id))\
+                .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+            last_log = tdb.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
+            if last_log:
+                card['last_offload'] = last_log.run_date
+                card['errors_today'] = last_log.errors_count or 0
+            last_bak = tdb.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
+            if last_bak:
+                card['last_backup'] = last_bak.run_date
+            # Red flags
+            from datetime import timedelta
+            now = datetime.utcnow()
+            if last_log and (now - last_log.run_date) > timedelta(hours=2):
+                card['red_flags'].append('No offload in 2h+')
+            failed_today = tdb.query(sqlfunc.count(TicketBackupItem.id))\
+                .filter(TicketBackupItem.backup_status == 'failed').scalar() or 0
+            if failed_today > 0:
+                card['red_flags'].append(f'{failed_today} backup failures')
+            if card['errors_today'] > 5:
+                card['red_flags'].append(f'{card["errors_today"]} offload errors')
+            tdb.close()
+        except Exception:
+            pass
+        cards.append(card)
+
+    return render_template('tenants.html', cards=cards)
+
+
+@app.route('/api/tenants/<slug>/toggle', methods=['POST'])
+@login_required
+def tenant_toggle(slug):
+    from tenant_manager import get_global_db, Tenant
+    gdb = get_global_db()
+    try:
+        t = gdb.query(Tenant).filter_by(slug=slug).first()
+        if not t:
+            return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+        t.is_active = not t.is_active
+        gdb.commit()
+        return jsonify({'success': True, 'is_active': t.is_active})
+    finally:
+        gdb.close()
+
+
+@app.route('/api/tenants/<slug>/delete', methods=['POST'])
+@login_required
+def tenant_delete(slug):
+    from tenant_manager import delete_tenant
+    ok = delete_tenant(slug, remove_data=False)  # soft-delete
+    return jsonify({'success': ok})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADD-TENANT WIZARD  —  /wizard
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/wizard')
+@login_required
+def wizard():
+    """New tenant setup wizard."""
+    return render_template('wizard.html')
+
+
+@app.route('/api/wizard/test_zendesk', methods=['POST'])
+@login_required
+def wizard_test_zendesk():
+    """Step 1 — validate Zendesk credentials."""
+    data = request.get_json(force=True) or {}
+    subdomain = (data.get('subdomain') or '').strip().lower()
+    email = (data.get('email') or '').strip()
+    api_token = (data.get('api_token') or '').strip()
+    if not subdomain or not email or not api_token:
+        return jsonify({'success': False, 'message': 'All fields are required'})
+    try:
+        import requests as req
+        url = f'https://{subdomain}.zendesk.com/api/v2/tickets/count.json'
+        r = req.get(url, auth=(f'{email}/token', api_token), timeout=10)
+        if r.status_code == 200:
+            count = r.json().get('count', {}).get('value', '?')
+            return jsonify({'success': True, 'message': f'Connected ✓ — {count} total tickets'})
+        elif r.status_code == 401:
+            return jsonify({'success': False, 'message': 'Invalid credentials (401)'})
+        else:
+            return jsonify({'success': False, 'message': f'Zendesk returned HTTP {r.status_code}'})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)})
+
+
+@app.route('/api/wizard/test_wasabi', methods=['POST'])
+@login_required
+def wizard_test_wasabi():
+    """Step 2 — validate Wasabi bucket access."""
+    data = request.get_json(force=True) or {}
+    endpoint = (data.get('endpoint') or '').strip()
+    access_key = (data.get('access_key') or '').strip()
+    secret_key = (data.get('secret_key') or '').strip()
+    bucket = (data.get('bucket') or '').strip()
+    if not all([endpoint, access_key, secret_key, bucket]):
+        return jsonify({'success': False, 'message': 'All fields are required'})
+    try:
+        import boto3
+        ep = endpoint if endpoint.startswith('http') else f'https://{endpoint}'
+        s3 = boto3.client('s3', endpoint_url=ep,
+                          aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+        s3.head_bucket(Bucket=bucket)
+        return jsonify({'success': True, 'message': f'Bucket "{bucket}" accessible ✓'})
+    except Exception as exc:
+        msg = str(exc)
+        if 'NoSuchBucket' in msg or '404' in msg:
+            # Try to create it
+            try:
+                s3.create_bucket(Bucket=bucket)
+                return jsonify({'success': True, 'message': f'Bucket "{bucket}" created ✓'})
+            except Exception as exc2:
+                return jsonify({'success': False, 'message': f'Bucket not found and could not create: {exc2}'})
+        return jsonify({'success': False, 'message': msg})
+
+
+@app.route('/api/wizard/test_offload', methods=['POST'])
+@login_required
+def wizard_test_offload():
+    """Step 3 — send a single-ticket offload test."""
+    data = request.get_json(force=True) or {}
+    ticket_id = data.get('ticket_id')
+    if not ticket_id:
+        return jsonify({'success': False, 'message': 'ticket_id required'})
+    try:
+        from tenant_manager import TenantConfig
+        cfg = TenantConfig(
+            slug='__wizard_test__',
+            zendesk_subdomain=data.get('zendesk_subdomain', ''),
+            zendesk_email=data.get('zendesk_email', ''),
+            zendesk_api_token=data.get('zendesk_api_token', ''),
+            wasabi_endpoint=data.get('wasabi_endpoint', ''),
+            wasabi_access_key=data.get('wasabi_access_key', ''),
+            wasabi_secret_key=data.get('wasabi_secret_key', ''),
+            wasabi_bucket_name=data.get('wasabi_bucket', ''),
+        )
+        from zendesk_client import ZendeskClient
+        from wasabi_client import WasabiClient
+        zd = ZendeskClient(subdomain=cfg.zendesk_subdomain,
+                           email=cfg.zendesk_email,
+                           api_token=cfg.zendesk_api_token)
+        attachments = zd.get_ticket_attachments(int(ticket_id))
+        if not attachments:
+            return jsonify({'success': True, 'message': 'Ticket has no attachments — credentials OK ✓'})
+        ws = WasabiClient(endpoint=cfg.wasabi_endpoint, access_key=cfg.wasabi_access_key,
+                          secret_key=cfg.wasabi_secret_key, bucket_name=cfg.wasabi_bucket_name)
+        uploaded = []
+        for att in attachments[:2]:  # test first 2 only
+            key = f'__wizard_test__/{ticket_id}/{att["file_name"]}'
+            ws.upload_bytes(att['content_url'], key)
+            uploaded.append(att['file_name'])
+        return jsonify({'success': True, 'message': f'Uploaded {len(uploaded)} attachment(s) ✓: {", ".join(uploaded)}'})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)})
+
+
+@app.route('/api/wizard/test_backup', methods=['POST'])
+@login_required
+def wizard_test_backup():
+    """Step 4 — test ticket backup bucket."""
+    data = request.get_json(force=True) or {}
+    endpoint = (data.get('backup_endpoint') or '').strip()
+    access_key = (data.get('wasabi_access_key') or '').strip()
+    secret_key = (data.get('wasabi_secret_key') or '').strip()
+    bucket = (data.get('backup_bucket') or '').strip()
+    if not all([endpoint, access_key, secret_key, bucket]):
+        return jsonify({'success': False, 'message': 'Backup bucket fields required'})
+    try:
+        import boto3, json as _json
+        ep = endpoint if endpoint.startswith('http') else f'https://{endpoint}'
+        s3 = boto3.client('s3', endpoint_url=ep,
+                          aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+        try:
+            s3.head_bucket(Bucket=bucket)
+        except Exception:
+            s3.create_bucket(Bucket=bucket)
+        test_key = '__wizard_backup_test__.json'
+        s3.put_object(Bucket=bucket, Key=test_key,
+                      Body=_json.dumps({'test': True, 'ts': datetime.utcnow().isoformat()}))
+        s3.delete_object(Bucket=bucket, Key=test_key)
+        return jsonify({'success': True, 'message': f'Backup bucket "{bucket}" write/delete OK ✓'})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)})
+
+
+@app.route('/api/wizard/test_notifications', methods=['POST'])
+@login_required
+def wizard_test_notifications():
+    """Step 5 — test Telegram + Slack."""
+    data = request.get_json(force=True) or {}
+    results = {}
+    # Telegram
+    tg_token = (data.get('telegram_bot_token') or '').strip()
+    tg_chat  = (data.get('telegram_chat_id') or '').strip()
+    if tg_token and tg_chat:
+        try:
+            from telegram_reporter import TelegramReporter
+            rep = TelegramReporter(bot_token=tg_token, chat_id=tg_chat)
+            ok = rep.send_simple_message('🟢 z2w wizard test — Telegram OK')
+            results['telegram'] = 'OK ✓' if ok else 'send failed'
+        except Exception as exc:
+            results['telegram'] = str(exc)
+    else:
+        results['telegram'] = 'skipped (not configured)'
+
+    # Slack
+    slack_url = (data.get('slack_webhook_url') or '').strip()
+    if slack_url:
+        try:
+            import requests as req
+            r = req.post(slack_url, json={'text': '🟢 z2w wizard test — Slack OK'}, timeout=8)
+            results['slack'] = 'OK ✓' if r.ok else f'HTTP {r.status_code}'
+        except Exception as exc:
+            results['slack'] = str(exc)
+    else:
+        results['slack'] = 'skipped (not configured)'
+
+    return jsonify({'success': True, 'results': results})
+
+
+@app.route('/api/wizard/save', methods=['POST'])
+@login_required
+def wizard_save():
+    """Save a new tenant from wizard data."""
+    data = request.get_json(force=True) or {}
+    subdomain = (data.get('zendesk_subdomain') or '').strip().lower()
+    if not subdomain:
+        return jsonify({'success': False, 'message': 'zendesk_subdomain required'})
+    import re as _re
+    slug = _re.sub(r'[^a-z0-9\-]', '-', subdomain).strip('-') or 'default'
+    from tenant_manager import TenantConfig, save_tenant_config, get_tenant_config
+    existing = get_tenant_config(slug)
+    if existing and not data.get('overwrite'):
+        return jsonify({'success': False, 'message': f'Tenant "{slug}" already exists',
+                        'exists': True, 'slug': slug})
+    cfg = TenantConfig(
+        slug=slug,
+        display_name=data.get('display_name') or subdomain,
+        zendesk_subdomain=subdomain,
+        zendesk_email=data.get('zendesk_email', ''),
+        zendesk_api_token=data.get('zendesk_api_token', ''),
+        wasabi_endpoint=data.get('wasabi_endpoint', ''),
+        wasabi_access_key=data.get('wasabi_access_key', ''),
+        wasabi_secret_key=data.get('wasabi_secret_key', ''),
+        wasabi_bucket_name=data.get('wasabi_bucket', ''),
+        ticket_backup_endpoint=data.get('backup_endpoint', ''),
+        ticket_backup_bucket=data.get('backup_bucket', ''),
+        telegram_bot_token=data.get('telegram_bot_token', ''),
+        telegram_chat_id=data.get('telegram_chat_id', ''),
+        slack_webhook_url=data.get('slack_webhook_url', ''),
+    )
+    save_tenant_config(cfg)
+    return jsonify({'success': True, 'slug': slug,
+                    'message': f'Tenant "{slug}" created successfully'})
+
+
+# ── Per-tenant route aliases (/t/{slug}/... → existing view functions) ────────
+
+@app.route('/t/<slug>/')
+@app.route('/t/<slug>/dashboard')
+@login_required
+def tenant_dashboard(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return index()
+
+
+@app.route('/t/<slug>/tickets')
+@login_required
+def tenant_tickets(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return tickets()
+
+
+@app.route('/t/<slug>/ticket_backup')
+@login_required
+def tenant_ticket_backup(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return ticket_backup()
+
+
+@app.route('/t/<slug>/storage')
+@login_required
+def tenant_storage(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return storage_report()
+
+
+@app.route('/t/<slug>/logs')
+@login_required
+def tenant_logs(slug):
+    from flask import g
+    g.tenant_slug = slug
+    from tenant_manager import get_tenant_config
+    g.tenant_cfg = get_tenant_config(slug)
+    return logs()
+
+
+@app.route('/t/<slug>/settings', methods=['GET', 'POST'])
+@login_required
+def tenant_settings(slug):
+    """Per-tenant settings — read/write via global.db TenantSetting."""
+    from flask import g
+    from tenant_manager import get_tenant_config, save_tenant_config, TenantConfig
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return f'Tenant "{slug}" not found', 404
+    g.tenant_slug = slug
+    g.tenant_cfg = cfg
+
+    if request.method == 'POST':
+        d = request.form
+        for field_name in ['display_name', 'zendesk_subdomain', 'zendesk_email',
+                           'zendesk_api_token', 'wasabi_endpoint', 'wasabi_access_key',
+                           'wasabi_secret_key', 'wasabi_bucket_name',
+                           'ticket_backup_endpoint', 'ticket_backup_bucket',
+                           'telegram_bot_token', 'telegram_chat_id',
+                           'slack_webhook_url', 'slack_bot_token',
+                           'scheduler_timezone', 'ticket_backup_time']:
+            if field_name in d:
+                setattr(cfg, field_name, d[field_name])
+        for int_field in ['continuous_offload_interval', 'attach_offload_interval_minutes',
+                          'ticket_backup_interval_minutes', 'ticket_backup_max_per_run',
+                          'max_attachments_per_run', 'storage_report_interval']:
+            if int_field in d:
+                try:
+                    setattr(cfg, int_field, int(d[int_field]))
+                except ValueError:
+                    pass
+        for bool_field in ['attach_offload_enabled', 'ticket_backup_enabled']:
+            setattr(cfg, bool_field, bool_field in d)
+        save_tenant_config(cfg)
+        flash('Settings saved', 'success')
+        return redirect(url_for('tenant_settings', slug=slug))
+
+    return render_template('tenant_settings.html', cfg=cfg, slug=slug)
+
 
 @app.route('/')
 @login_required
@@ -1078,7 +1511,7 @@ def ticket_backup():
             order=sort_order,
             status_filter=status_filter,
             status_counts=status_counts,
-            total_items=total_items,
+            total_items=total_rows,
             success_count=success_count,
             failed_count=failed_count,
             pending_count=pending_count,
@@ -2297,6 +2730,282 @@ def _reset_admin_password_internal():
             'success': False,
             'message': f'Error resetting password: {str(e)}'
         }), 500
+
+
+# ── Global Tools Page ──────────────────────────────────────────────────────────
+
+@app.route('/tools')
+@login_required
+def tools():
+    """Network & infrastructure diagnostics tools page."""
+    from config import (
+        WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME,
+        TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET,
+    )
+    import re
+
+    def _endpoint_host(ep):
+        ep = ep or ''
+        if not ep.startswith('http'):
+            ep = 'https://' + ep
+        m = re.search(r'https?://([^/]+)', ep)
+        return m.group(1) if m else ep
+
+    buckets = []
+    if WASABI_ENDPOINT and WASABI_BUCKET_NAME:
+        buckets.append({
+            'label': f'Offload ({WASABI_BUCKET_NAME})',
+            'host': _endpoint_host(WASABI_ENDPOINT),
+            'bucket': WASABI_BUCKET_NAME,
+            'endpoint': WASABI_ENDPOINT,
+        })
+    if TICKET_BACKUP_ENDPOINT and TICKET_BACKUP_BUCKET:
+        host2 = _endpoint_host(TICKET_BACKUP_ENDPOINT)
+        if not any(b['host'] == host2 and b['bucket'] == TICKET_BACKUP_BUCKET for b in buckets):
+            buckets.append({
+                'label': f'Backup ({TICKET_BACKUP_BUCKET})',
+                'host': host2,
+                'bucket': TICKET_BACKUP_BUCKET,
+                'endpoint': TICKET_BACKUP_ENDPOINT,
+            })
+    return render_template('tools.html', buckets=buckets)
+
+
+@app.route('/api/tools/ping')
+@login_required
+def tools_ping():
+    """Stream ping results (10 packets) to a target host."""
+    import subprocess, shlex
+    from flask import Response, stream_with_context
+    target = (request.args.get('host') or '').strip()
+    if not target:
+        return jsonify({'error': 'host required'}), 400
+
+    # Sanitise: only allow hostname/IP chars
+    import re
+    if not re.match(r'^[a-zA-Z0-9.\-]+$', target):
+        return jsonify({'error': 'invalid host'}), 400
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                ['ping', '-c', '10', '-W', '3', target],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                yield line
+            proc.wait()
+            yield f'\n[exit code: {proc.returncode}]\n'
+        except Exception as exc:
+            yield f'Error: {exc}\n'
+
+    return Response(stream_with_context(generate()), mimetype='text/plain')
+
+
+@app.route('/api/tools/traceroute')
+@login_required
+def tools_traceroute():
+    """Stream traceroute to a target host."""
+    import subprocess, re
+    from flask import Response, stream_with_context
+    target = (request.args.get('host') or '').strip()
+    if not target or not re.match(r'^[a-zA-Z0-9.\-]+$', target):
+        return jsonify({'error': 'invalid host'}), 400
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                ['traceroute', '-w', '3', '-m', '20', target],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                yield line
+            proc.wait()
+            yield f'\n[exit code: {proc.returncode}]\n'
+        except Exception as exc:
+            yield f'Error: {exc}\n'
+
+    return Response(stream_with_context(generate()), mimetype='text/plain')
+
+
+@app.route('/api/tools/dns')
+@login_required
+def tools_dns():
+    """DNS lookup using dig."""
+    import subprocess, re
+    from flask import Response, stream_with_context
+    target = (request.args.get('host') or '').strip()
+    rtype = (request.args.get('type') or 'A').strip().upper()
+    if not target or not re.match(r'^[a-zA-Z0-9.\-]+$', target):
+        return jsonify({'error': 'invalid host'}), 400
+    if rtype not in ('A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'PTR', 'SOA'):
+        rtype = 'A'
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                ['dig', '+noall', '+answer', '+stats', rtype, target],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                yield line
+            proc.wait()
+        except Exception as exc:
+            yield f'Error: {exc}\n'
+
+    return Response(stream_with_context(generate()), mimetype='text/plain')
+
+
+@app.route('/api/tools/speedtest')
+@login_required
+def tools_speedtest():
+    """
+    Wasabi speed test: download Rocky Linux ISO (~976 MB), then upload to bucket,
+    reporting throughput in real-time via SSE-style plain text stream.
+    """
+    import re, time, threading, tempfile, os
+    from flask import Response, stream_with_context
+    from config import WASABI_ACCESS_KEY, WASABI_SECRET_KEY
+
+    bucket_id = (request.args.get('bucket') or '0').strip()
+    from config import (
+        WASABI_ENDPOINT, WASABI_BUCKET_NAME,
+        TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET,
+    )
+
+    def _endpoint_host(ep):
+        if not ep.startswith('http'):
+            ep = 'https://' + ep
+        return ep
+
+    bucket_configs = []
+    if WASABI_ENDPOINT and WASABI_BUCKET_NAME:
+        bucket_configs.append((WASABI_BUCKET_NAME, _endpoint_host(WASABI_ENDPOINT)))
+    if TICKET_BACKUP_ENDPOINT and TICKET_BACKUP_BUCKET:
+        bucket_configs.append((TICKET_BACKUP_BUCKET, _endpoint_host(TICKET_BACKUP_ENDPOINT)))
+
+    try:
+        idx = int(bucket_id)
+        if idx >= len(bucket_configs):
+            idx = 0
+    except ValueError:
+        idx = 0
+
+    bucket_name, endpoint = bucket_configs[idx] if bucket_configs else (WASABI_BUCKET_NAME, _endpoint_host(WASABI_ENDPOINT))
+
+    ISO_URL = 'https://download.rockylinux.org/pub/rocky/10/isos/x86_64/Rocky-10.1-x86_64-minimal.iso'
+    TEST_KEY = '__speedtest_rocky_minimal.iso'
+
+    def generate():
+        import boto3, requests as req_lib
+
+        yield f'=== Wasabi Speed Test: {bucket_name} ({endpoint}) ===\n'
+        yield f'ISO: {ISO_URL}\n\n'
+
+        # ── Phase 1: Download ISO from Rocky CDN ──────────────────────
+        yield '--- Phase 1: Download from Rocky CDN ---\n'
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.iso')
+        try:
+            t0 = time.time()
+            downloaded = 0
+            chunk_size = 4 * 1024 * 1024  # 4 MB chunks
+            last_report = 0
+
+            with req_lib.get(ISO_URL, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                yield f'File size: {total_size / 1048576:.1f} MB\n'
+
+                for chunk in r.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        tmp.write(chunk)
+                        downloaded += len(chunk)
+                        elapsed = time.time() - t0
+                        speed_mb = (downloaded / elapsed / 1048576) if elapsed > 0 else 0
+                        pct = (downloaded / total_size * 100) if total_size else 0
+                        if downloaded - last_report >= 50 * 1024 * 1024:  # report every 50 MB
+                            yield (
+                                f'  Downloaded: {downloaded/1048576:.0f} MB / {total_size/1048576:.0f} MB'
+                                f'  ({pct:.0f}%)  {speed_mb:.1f} MB/s\n'
+                            )
+                            last_report = downloaded
+
+            elapsed_dl = time.time() - t0
+            speed_dl = downloaded / elapsed_dl / 1048576
+            yield f'\nDownload complete: {downloaded/1048576:.1f} MB in {elapsed_dl:.1f}s = {speed_dl:.2f} MB/s\n\n'
+            tmp.flush()
+
+            # ── Phase 2: Upload to Wasabi ──────────────────────────────
+            yield '--- Phase 2: Upload to Wasabi ---\n'
+            yield f'Bucket: {bucket_name}  Key: {TEST_KEY}\n'
+
+            s3 = boto3.client(
+                's3',
+                endpoint_url=endpoint,
+                aws_access_key_id=WASABI_ACCESS_KEY,
+                aws_secret_access_key=WASABI_SECRET_KEY,
+            )
+
+            file_size = os.path.getsize(tmp.name)
+            upload_progress = {'bytes': 0, 'last_report': 0, 'start': time.time()}
+
+            def _progress_cb(bytes_transferred):
+                upload_progress['bytes'] += bytes_transferred
+
+            t1 = time.time()
+            # Use multipart via transfer config for progress
+            from boto3.s3.transfer import TransferConfig
+            config = TransferConfig(multipart_chunksize=8 * 1024 * 1024, max_concurrency=4)
+
+            # We can't yield inside callback, so upload synchronously and report after
+            yield f'Uploading {file_size/1048576:.1f} MB ...\n'
+            with open(tmp.name, 'rb') as fh:
+                s3.upload_fileobj(fh, bucket_name, TEST_KEY, Config=config,
+                                  Callback=_progress_cb)
+            elapsed_ul = time.time() - t1
+            speed_ul = file_size / elapsed_ul / 1048576
+            yield f'Upload complete: {file_size/1048576:.1f} MB in {elapsed_ul:.1f}s = {speed_ul:.2f} MB/s\n\n'
+
+            # ── Phase 3: Download back from Wasabi ─────────────────────
+            yield '--- Phase 3: Download from Wasabi ---\n'
+            t2 = time.time()
+            dl_bytes = 0
+            obj = s3.get_object(Bucket=bucket_name, Key=TEST_KEY)
+            body = obj['Body']
+            while True:
+                chunk = body.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                dl_bytes += len(chunk)
+            elapsed_dl2 = time.time() - t2
+            speed_dl2 = dl_bytes / elapsed_dl2 / 1048576
+            yield f'Download complete: {dl_bytes/1048576:.1f} MB in {elapsed_dl2:.1f}s = {speed_dl2:.2f} MB/s\n\n'
+
+            # ── Phase 4: Cleanup ───────────────────────────────────────
+            try:
+                s3.delete_object(Bucket=bucket_name, Key=TEST_KEY)
+                yield f'Cleanup: {TEST_KEY} deleted from bucket.\n\n'
+            except Exception as ce:
+                yield f'Cleanup warning: {ce}\n\n'
+
+            yield '=== Summary ===\n'
+            yield f'  CDN download:     {speed_dl:.2f} MB/s\n'
+            yield f'  Wasabi upload:    {speed_ul:.2f} MB/s\n'
+            yield f'  Wasabi download:  {speed_dl2:.2f} MB/s\n'
+
+        except Exception as exc:
+            yield f'\nERROR: {exc}\n'
+        finally:
+            tmp.close()
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    return Response(stream_with_context(generate()), mimetype='text/plain')
 
 if __name__ == '__main__':
     # Initialize database

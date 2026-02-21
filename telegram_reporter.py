@@ -23,6 +23,21 @@ class TelegramReporter:
             self.api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             self.file_api_url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
     
+    def send_simple_message(self, text: str) -> bool:
+        """Send a plain text message to the configured chat."""
+        if not self.bot_token or not self.chat_id:
+            return False
+        try:
+            import requests as _req
+            r = _req.post(
+                f'https://api.telegram.org/bot{self.bot_token}/sendMessage',
+                json={'chat_id': self.chat_id, 'text': text},
+                timeout=10,
+            )
+            return r.ok
+        except Exception:
+            return False
+
     def send_report(self, summary: Dict) -> bool:
         """
         Send report to Telegram

@@ -347,6 +347,41 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: oklch(0.30 0.008 265); border-radius: 999px; }
     ::-webkit-scrollbar-thumb:hover { background: oklch(0.38 0.008 265); }
+
+    /* ── Tenant tree nav ───────────────────────────────────── */
+    .nav-tenant-group { }
+    .nav-tenant-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: var(--radius);
+      cursor: pointer; user-select: none;
+      transition: background 0.12s;
+    }
+    .nav-tenant-header:hover { background: var(--sidebar-accent); }
+    .nav-tenant-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: oklch(0.42 0.008 265); flex-shrink: 0;
+    }
+    .dot-active { background: oklch(0.65 0.17 145); }
+    .nav-tenant-name {
+      flex: 1; font-size: 12px; font-weight: 500;
+      color: var(--sidebar-muted); overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .nav-tenant-chevron {
+      color: var(--sidebar-muted); flex-shrink: 0;
+      transition: transform 0.2s ease;
+    }
+    .nav-tenant-group.expanded .nav-tenant-chevron { transform: rotate(180deg); }
+    .nav-tenant-children { display: none; padding-bottom: 2px; }
+    .nav-tenant-group.expanded .nav-tenant-children { display: block; }
+    .nav-sub {
+      padding-left: 22px !important;
+      font-size: 12.5px !important;
+    }
+    .sidebar.collapsed .nav-tenant-header { justify-content: center; padding: 8px 0; }
+    .sidebar.collapsed .nav-tenant-name,
+    .sidebar.collapsed .nav-tenant-chevron { display: none; }
+    .sidebar.collapsed .nav-tenant-children { display: none !important; }
   </style>
 </head>
 <body>
@@ -367,43 +402,82 @@
     </div>
     {% endif %}
     <nav class="sidebar-nav">
-      <div class="nav-section">Overview</div>
-      <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        <span>Dashboard</span>
+
+      <!-- ── Global ──────────────────────────────────────── -->
+      <div class="nav-section">Global</div>
+      <a href="{{ url_for('tenants_overview') }}" class="nav-item {% if request.endpoint == 'tenants_overview' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Tenants</span>
       </a>
-      <a href="{{ url_for('logs') }}" class="nav-item {% if request.endpoint == 'logs' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
-        <span>Offload Logs</span>
+      <a href="{{ url_for('wizard') }}" class="nav-item {% if request.endpoint == 'wizard' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Add Tenant</span>
       </a>
-      <a href="{{ url_for('recheck_report') }}" class="nav-item {% if request.endpoint == 'recheck_report' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        <span>Recheck Report</span>
-      </a>
-      <div class="nav-section">Data</div>
-      <a href="{{ url_for('tickets') }}" class="nav-item {% if request.endpoint == 'tickets' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
-        <span>Processed Tickets</span>
-      </a>
-      <a href="{{ url_for('storage_report') }}" class="nav-item {% if request.endpoint == 'storage_report' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-        <span>Storage Usage</span>
-      </a>
-      <a href="{{ url_for('ticket_backup') }}" class="nav-item {% if request.endpoint == 'ticket_backup' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span>Ticket Backup</span>
-      </a>
+
+      <!-- ── Tenant tree ────────────────────────────────── -->
+      {%- set _cur_slug = g.tenant_slug if g and g.tenant_slug else '' %}
+      {% if g and g.all_tenants %}
+        {% for _t in g.all_tenants %}
+          <div class="nav-tenant-group {% if _t.slug == _cur_slug %}expanded{% endif %}"
+               id="ntg-{{ _t.slug }}">
+            <div class="nav-tenant-header" onclick="toggleTenantNav('{{ _t.slug }}')">
+              <span class="nav-tenant-dot {% if _t.is_active %}dot-active{% endif %}"></span>
+              <span class="nav-tenant-name">{{ (_t.display_name or _t.slug)|truncate(18, True, '…') }}</span>
+              <svg class="nav-tenant-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div class="nav-tenant-children">
+              <a href="{{ url_for('tenant_dashboard', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint in ('tenant_dashboard','index') and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                <span>Dashboard</span>
+              </a>
+              <a href="{{ url_for('tenant_logs', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint in ('tenant_logs','logs') and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
+                <span>Logs</span>
+              </a>
+              <a href="{{ url_for('tenant_tickets', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint in ('tenant_tickets','tickets') and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+                <span>Tickets</span>
+              </a>
+              <a href="{{ url_for('tenant_storage', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint in ('tenant_storage','storage_report') and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+                <span>Storage</span>
+              </a>
+              <a href="{{ url_for('tenant_ticket_backup', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint in ('tenant_ticket_backup','ticket_backup') and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <span>Backup</span>
+              </a>
+              <a href="{{ url_for('tenant_settings', slug=_t.slug) }}"
+                 class="nav-item nav-sub {% if request.endpoint == 'tenant_settings' and _t.slug == _cur_slug %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>
+                <span>Settings</span>
+              </a>
+            </div>
+          </div>
+        {% endfor %}
+      {% endif %}
+
+      <!-- ── Explorer & System ──────────────────────────── -->
       <div class="nav-divider"></div>
       <div class="nav-section">Explorer</div>
       <a href="{{ url_for('explorer_app') }}" class="nav-item {% if request.endpoint == 'explorer_app' %}active{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <span>Zendesk Explorer</span>
       </a>
-      <div class="nav-section">Config</div>
-      <a href="{{ url_for('settings') }}" class="nav-item {% if request.endpoint == 'settings' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span>Settings</span>
+      <div class="nav-section">System</div>
+      <a href="{{ url_for('tools') }}" class="nav-item {% if request.endpoint == 'tools' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        <span>Tools</span>
       </a>
+
+
+        <span>Recheck Report</span>
+      </a>
+
     </nav>
     <div class="sidebar-footer">
       <a href="{{ url_for('logout') }}" class="nav-item">
@@ -490,6 +564,11 @@ function showToast(message, type) {
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.addEventListener('click', e => { if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('open'); });
+
+function toggleTenantNav(slug) {
+  const grp = document.getElementById('ntg-' + slug);
+  if (grp) grp.classList.toggle('expanded');
+}
 </script>
 {% block scripts %}{% endblock %}
 </body>

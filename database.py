@@ -143,17 +143,25 @@ def init_db():
     # Add missing columns to existing tables if needed
     _migrate_database()
 
-def _migrate_database():
+
+def _migrate_on_engine(eng):
+    """Run the same migrations against any engine (used for per-tenant DBs)."""
+    _migrate_database(eng)
+
+
+def _migrate_database(eng=None):
     """Add missing columns / tables to existing database"""
+    if eng is None:
+        eng = engine
     from sqlalchemy import inspect, text
-    inspector = inspect(engine)
+    inspector = inspect(eng)
 
     # ── processed_tickets: add missing columns ───────────────────────
     if 'processed_tickets' in inspector.get_table_names():
         existing_columns = [col['name'] for col in inspector.get_columns('processed_tickets')]
         if 'wasabi_files' not in existing_columns:
             try:
-                with engine.connect() as conn:
+                with eng.connect() as conn:
                     conn.execute(text("ALTER TABLE processed_tickets ADD COLUMN wasabi_files TEXT"))
                     conn.commit()
                 print("Added wasabi_files column to processed_tickets table")
@@ -161,7 +169,7 @@ def _migrate_database():
                 print(f"Note: Could not add wasabi_files column: {e}")
         if 'wasabi_files_size' not in existing_columns:
             try:
-                with engine.connect() as conn:
+                with eng.connect() as conn:
                     conn.execute(text("ALTER TABLE processed_tickets ADD COLUMN wasabi_files_size INTEGER DEFAULT 0"))
                     conn.commit()
                 print("Added wasabi_files_size column to processed_tickets table")
@@ -171,7 +179,7 @@ def _migrate_database():
     # ── zendesk_ticket_cache: create if missing ────────────────────────
     if 'zendesk_ticket_cache' not in inspector.get_table_names():
         try:
-            ZendeskTicketCache.__table__.create(engine)
+            ZendeskTicketCache.__table__.create(eng)
             print("Created zendesk_ticket_cache table")
         except Exception as e:
             print(f"Note: Could not create zendesk_ticket_cache table: {e}")
@@ -179,7 +187,7 @@ def _migrate_database():
     # ── zendesk_storage_snapshot: create if missing ────────────────────────
     if 'zendesk_storage_snapshot' not in inspector.get_table_names():
         try:
-            ZendeskStorageSnapshot.__table__.create(engine)
+            ZendeskStorageSnapshot.__table__.create(eng)
             print("Created zendesk_storage_snapshot table")
         except Exception as e:
             print(f"Note: Could not create zendesk_storage_snapshot table: {e}")
@@ -187,7 +195,7 @@ def _migrate_database():
     # ── ticket_backup_runs: create if missing ───────────────────────────────
     if 'ticket_backup_runs' not in inspector.get_table_names():
         try:
-            TicketBackupRun.__table__.create(engine)
+            TicketBackupRun.__table__.create(eng)
             print("Created ticket_backup_runs table")
         except Exception as e:
             print(f"Note: Could not create ticket_backup_runs table: {e}")
@@ -195,13 +203,35 @@ def _migrate_database():
     # ── ticket_backup_items: create if missing ──────────────────────────────
     if 'ticket_backup_items' not in inspector.get_table_names():
         try:
-            TicketBackupItem.__table__.create(engine)
+            TicketBackupItem.__table__.create(eng)
             print("Created ticket_backup_items table")
         except Exception as e:
             print(f"Note: Could not create ticket_backup_items table: {e}")
 
-def get_db():
-    """Get database session"""
+def get_db(slug: str = None):
+    """
+    Get a database session.
+
+    If *slug* is given (or a tenant slug is stored on the current Flask request
+    via Flask's 'g' object), returns a session for that tenant's tickets.db.
+    Falls back to the legacy tickets.db for backward-compat during transition.
+    """
+    if slug is None:
+        # Try to pull the current tenant from Flask request context
+        try:
+            from flask import g as _g
+            slug = getattr(_g, 'tenant_slug', None)
+        except RuntimeError:
+            # Outside of request context (scheduler, CLI)
+            pass
+
+    if slug:
+        try:
+            from tenant_manager import get_tenant_db_session
+            return get_tenant_db_session(slug)
+        except Exception:
+            pass  # Fall through to legacy DB
+
     return SessionLocal()
 
 

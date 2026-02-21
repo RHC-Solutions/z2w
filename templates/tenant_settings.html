@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block page_title %}{{ cfg.display_name }} — Settings{% endblock %}
+{% block page_sub %}{{ cfg.slug }}.zendesk.com{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('tenant_dashboard', slug=cfg.slug) }}"
+   style="font-size:.8rem;color:#888;text-decoration:none;display:flex;align-items:center;gap:4px;">
+  ← Dashboard
+</a>
+{% endblock %}
+
+{% block content %}
+<style>
+.ts-wrap { max-width: 780px; margin: 1.5rem auto; padding: 0 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; }
+
+.ts-card {
+  background: var(--card-bg, #1a1a2e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 11px;
+  overflow: hidden;
+}
+.ts-card-header {
+  padding: .85rem 1.25rem .7rem;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+  display: flex; align-items: center; gap: .6rem;
+}
+.ts-card-header svg { width: 16px; height: 16px; color: var(--accent, #6c63ff); flex-shrink: 0; }
+.ts-card-header h3 { margin: 0; font-size: .9rem; font-weight: 600; color: var(--text-primary, #e0e0e0); }
+
+.ts-body { padding: 1.25rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.ts-body.single-col { grid-template-columns: 1fr; }
+
+.form-row { display: flex; flex-direction: column; gap: .3rem; }
+.form-row label { font-size: .75rem; color: #aaa; font-weight: 600; }
+.form-row input, .form-row select {
+  background: var(--input-bg, #12121e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 6px;
+  color: var(--text-primary, #e0e0e0);
+  font-size: .85rem;
+  padding: .42rem .65rem;
+  outline: none;
+  transition: border-color .15s;
+}
+.form-row input:focus, .form-row select:focus { border-color: var(--accent, #6c63ff); }
+.form-row .hint { font-size: .7rem; color: #666; }
+
+.ts-footer { padding: .9rem 1.25rem; border-top: 1px solid var(--border, #2a2a3e); display: flex; gap: .75rem; }
+.btn-save { padding: .44rem 1.1rem; background: var(--accent, #6c63ff); color: #fff; border: none; border-radius: 7px; font-size: .85rem; font-weight: 600; cursor: pointer; }
+.btn-save:hover { opacity: .85; }
+.check-row { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: #ccc; }
+.check-row input[type=checkbox] { accent-color: var(--accent, #6c63ff); width: 15px; height: 15px; }
+</style>
+
+<form method="POST" action="{{ url_for('tenant_settings', slug=cfg.slug) }}">
+<div class="ts-wrap">
+
+  <!-- General -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/></svg>
+      <h3>General</h3>
+    </div>
+    <div class="ts-body single-col">
+      <div class="form-row">
+        <label>Display Name</label>
+        <input name="display_name" value="{{ cfg.display_name }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Zendesk -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      <h3>Zendesk</h3>
+    </div>
+    <div class="ts-body">
+      <div class="form-row">
+        <label>Subdomain</label>
+        <input name="zendesk_subdomain" value="{{ cfg.zendesk_subdomain }}">
+        <div class="hint">{{ cfg.zendesk_subdomain }}.zendesk.com</div>
+      </div>
+      <div class="form-row">
+        <label>Admin Email</label>
+        <input name="zendesk_email" type="email" value="{{ cfg.zendesk_email }}">
+      </div>
+      <div class="form-row" style="grid-column:1/-1">
+        <label>API Token</label>
+        <input name="zendesk_api_token" type="password" value="{{ cfg.zendesk_api_token }}"
+               placeholder="(unchanged if empty)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Wasabi Offload -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      <h3>Wasabi — Offload Bucket</h3>
+    </div>
+    <div class="ts-body">
+      <div class="form-row">
+        <label>Endpoint</label>
+        <input name="wasabi_endpoint" value="{{ cfg.wasabi_endpoint }}">
+      </div>
+      <div class="form-row">
+        <label>Bucket Name</label>
+        <input name="wasabi_bucket_name" value="{{ cfg.wasabi_bucket_name }}">
+      </div>
+      <div class="form-row">
+        <label>Access Key</label>
+        <input name="wasabi_access_key" value="{{ cfg.wasabi_access_key }}">
+      </div>
+      <div class="form-row">
+        <label>Secret Key</label>
+        <input name="wasabi_secret_key" type="password" value="{{ cfg.wasabi_secret_key }}"
+               placeholder="(unchanged if empty)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Wasabi Backup -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <h3>Wasabi — Backup Bucket</h3>
+    </div>
+    <div class="ts-body">
+      <div class="form-row">
+        <label>Endpoint</label>
+        <input name="ticket_backup_endpoint" value="{{ cfg.ticket_backup_endpoint }}">
+      </div>
+      <div class="form-row">
+        <label>Bucket Name</label>
+        <input name="ticket_backup_bucket" value="{{ cfg.ticket_backup_bucket }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Telegram -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+      <h3>Telegram</h3>
+    </div>
+    <div class="ts-body">
+      <div class="form-row">
+        <label>Bot Token</label>
+        <input name="telegram_bot_token" type="password" value="{{ cfg.telegram_bot_token }}"
+               placeholder="(unchanged if empty)">
+      </div>
+      <div class="form-row">
+        <label>Chat ID</label>
+        <input name="telegram_chat_id" value="{{ cfg.telegram_chat_id }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Slack -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><path d="M8 12h8M12 8v8"/></svg>
+      <h3>Slack</h3>
+    </div>
+    <div class="ts-body single-col">
+      <div class="form-row">
+        <label>Webhook URL</label>
+        <input name="slack_webhook_url" value="{{ cfg.slack_webhook_url }}" placeholder="https://hooks.slack.com/services/...">
+      </div>
+    </div>
+  </div>
+
+  <!-- Scheduler -->
+  <div class="ts-card">
+    <div class="ts-card-header">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <h3>Scheduler</h3>
+    </div>
+    <div class="ts-body">
+      <div class="form-row">
+        <label>Timezone</label>
+        <input name="scheduler_timezone" value="{{ cfg.scheduler_timezone }}">
+      </div>
+      <div class="form-row">
+        <label>Continuous Offload Interval (min)</label>
+        <input name="continuous_offload_interval" type="number" value="{{ cfg.continuous_offload_interval }}">
+      </div>
+      <div class="form-row">
+        <label>Ticket Backup Time (HH:MM)</label>
+        <input name="ticket_backup_time" value="{{ cfg.ticket_backup_time }}">
+      </div>
+      <div class="form-row">
+        <label>Backup Max Per Run (0=unlimited)</label>
+        <input name="ticket_backup_max_per_run" type="number" value="{{ cfg.ticket_backup_max_per_run }}">
+      </div>
+      <div class="form-row">
+        <label>Max Attachments Per Run (0=unlimited)</label>
+        <input name="max_attachments_per_run" type="number" value="{{ cfg.max_attachments_per_run }}">
+      </div>
+      <div class="form-row">
+        <label>Storage Report Interval (min)</label>
+        <input name="storage_report_interval" type="number" value="{{ cfg.storage_report_interval }}">
+      </div>
+      <div class="form-row" style="grid-column:1/-1">
+        <label class="check-row">
+          <input type="checkbox" name="attach_offload_enabled" {% if cfg.attach_offload_enabled %}checked{% endif %}>
+          Attachment offload enabled
+        </label>
+        <label class="check-row" style="margin-top:.4rem">
+          <input type="checkbox" name="ticket_backup_enabled" {% if cfg.ticket_backup_enabled %}checked{% endif %}>
+          Ticket backup enabled
+        </label>
+      </div>
+    </div>
+    <div class="ts-footer">
+      <button type="submit" class="btn-save">Save Settings</button>
+    </div>
+  </div>
+
+</div>
+</form>
+{% endblock %}

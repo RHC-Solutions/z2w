@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block page_title %}Tenants{% endblock %}
+{% block page_sub %}Multi-tenant overview &amp; management{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('wizard') }}" class="btn-primary" style="display:inline-flex;align-items:center;gap:6px;padding:.4rem 1rem;background:var(--accent,#6c63ff);color:#fff;border-radius:7px;font-size:.85rem;font-weight:600;text-decoration:none;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  Add Tenant
+</a>
+{% endblock %}
+
+{% block content %}
+<style>
+.tenants-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1.25rem;
+  padding: 1.5rem;
+}
+
+.tenant-card {
+  background: var(--card-bg, #1a1a2e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 11px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.tenant-card:hover { border-color: #444; box-shadow: 0 4px 20px rgba(0,0,0,.3); }
+.tenant-card.inactive { opacity: .55; }
+
+.tc-header {
+  padding: .9rem 1.1rem .7rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+}
+
+.tc-avatar {
+  width: 38px; height: 38px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #6c63ff 0%, #3b82f6 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; font-weight: 700; color: #fff;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.tc-title { flex: 1; min-width: 0; }
+.tc-title h3 { margin: 0; font-size: .95rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary, #e0e0e0); }
+.tc-title .slug { font-size: .72rem; color: #888; font-family: monospace; }
+
+.badge-active   { background: #1a2a1a; color: #4caf50; border: 1px solid #2a4a2a; }
+.badge-inactive { background: #2a1a1a; color: #f44336; border: 1px solid #4a2a2a; }
+.badge-uncfg    { background: #2a2a1a; color: #ff9800; border: 1px solid #4a3a1a; }
+.status-badge { font-size: .68rem; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+
+.tc-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+}
+.tc-stat {
+  padding: .6rem .5rem;
+  text-align: center;
+  border-right: 1px solid var(--border, #2a2a3e);
+}
+.tc-stat:last-child { border-right: none; }
+.tc-stat .value { font-size: 1.1rem; font-weight: 700; color: var(--text-primary, #e0e0e0); }
+.tc-stat .label { font-size: .65rem; color: #888; margin-top: 1px; }
+
+.tc-flags {
+  padding: .5rem 1rem;
+  min-height: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  align-items: center;
+}
+.flag-pill {
+  background: #2a1a1a;
+  color: #f44336;
+  border: 1px solid #4a2a2a;
+  font-size: .68rem;
+  padding: 1px 8px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+.no-flags { font-size: .72rem; color: #4caf50; }
+
+.tc-footer {
+  padding: .7rem 1rem;
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  background: rgba(0,0,0,.15);
+}
+.tc-footer .meta { font-size: .68rem; color: #666; flex: 1; }
+
+.btn-sm {
+  padding: .28rem .65rem;
+  font-size: .75rem;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: opacity .15s;
+}
+.btn-sm:hover { opacity: .8; }
+.btn-open   { background: var(--accent, #6c63ff); color: #fff; }
+.btn-sett   { background: #2a2a3e; color: #aaa; }
+.btn-toggle { background: transparent; color: #888; border: 1px solid #333; }
+
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 4rem 2rem;
+  color: #666;
+}
+.empty-state svg { width: 48px; height: 48px; margin: 0 auto 1rem; display: block; color: #333; }
+.empty-state h3 { color: #888; margin: 0 0 .5rem; }
+.empty-state p { font-size: .85rem; margin: 0 0 1.5rem; }
+</style>
+
+<div class="tenants-grid">
+  {% if not cards %}
+  <div class="empty-state">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>
+    <h3>No tenants yet</h3>
+    <p>Use the Add Tenant wizard to connect your first Zendesk account.</p>
+    <a href="{{ url_for('wizard') }}" class="btn-sm btn-open">Add First Tenant</a>
+  </div>
+  {% endif %}
+
+  {% for c in cards %}
+  <div class="tenant-card {% if not c.is_active %}inactive{% endif %}">
+    <div class="tc-header">
+      <div class="tc-avatar">{{ c.display_name[0] }}</div>
+      <div class="tc-title">
+        <h3>{{ c.display_name }}</h3>
+        <div class="slug">{{ c.slug }}.zendesk.com</div>
+      </div>
+      {% if not c.configured %}
+        <span class="status-badge badge-uncfg">Not Configured</span>
+      {% elif c.is_active %}
+        <span class="status-badge badge-active">Active</span>
+      {% else %}
+        <span class="status-badge badge-inactive">Inactive</span>
+      {% endif %}
+    </div>
+
+    <div class="tc-stats">
+      <div class="tc-stat">
+        <div class="value">{{ '{:,}'.format(c.tickets_processed) }}</div>
+        <div class="label">Offloaded</div>
+      </div>
+      <div class="tc-stat">
+        <div class="value">{{ '{:,}'.format(c.tickets_backed_up) }}</div>
+        <div class="label">Backed Up</div>
+      </div>
+      <div class="tc-stat">
+        <div class="value {% if c.errors_today > 5 %}text-danger{% endif %}">{{ c.errors_today }}</div>
+        <div class="label">Errors</div>
+      </div>
+    </div>
+
+    <div class="tc-flags">
+      {% if c.red_flags %}
+        {% for flag in c.red_flags %}
+          <span class="flag-pill">⚑ {{ flag }}</span>
+        {% endfor %}
+      {% else %}
+        <span class="no-flags">✓ No issues</span>
+      {% endif %}
+    </div>
+
+    <div class="tc-footer">
+      <div class="meta">
+        {% if c.last_offload %}Last offload: {{ c.last_offload.strftime('%b %d %H:%M') }}{% else %}Never offloaded{% endif %}
+      </div>
+      <a href="{{ url_for('tenant_dashboard', slug=c.slug) }}" class="btn-sm btn-open">Open</a>
+      <a href="{{ url_for('tenant_settings', slug=c.slug) }}" class="btn-sm btn-sett">Settings</a>
+      <button class="btn-sm btn-toggle" onclick="toggleTenant('{{ c.slug }}', this)">
+        {{ 'Disable' if c.is_active else 'Enable' }}
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+async function toggleTenant(slug, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/tenants/${slug}/toggle`, {method:'POST'});
+    const d = await r.json();
+    if (d.success) location.reload();
+    else alert(d.message);
+  } finally { btn.disabled = false; }
+}
+</script>
+{% endblock %}

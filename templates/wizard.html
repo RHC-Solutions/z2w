@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+
+{% block page_title %}Add Tenant{% endblock %}
+{% block page_sub %}Connect a new Zendesk account — 5-step setup wizard{% endblock %}
+
+{% block content %}
+<style>
+.wizard-wrap {
+  max-width: 680px;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+}
+
+/* Steps progress bar */
+.wizard-steps {
+  display: flex;
+  align-items: center;
+  margin-bottom: 2rem;
+  position: relative;
+}
+.wizard-steps::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--border, #2a2a3e);
+  z-index: 0;
+}
+.step-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  cursor: default;
+}
+.step-circle {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--card-bg, #1a1a2e);
+  border: 2px solid var(--border, #2a2a3e);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .8rem; font-weight: 700;
+  color: #888;
+  transition: all .2s;
+}
+.step-node.active   .step-circle { background: var(--accent, #6c63ff); border-color: var(--accent, #6c63ff); color: #fff; }
+.step-node.done     .step-circle { background: #4caf50; border-color: #4caf50; color: #fff; }
+.step-label {
+  font-size: .65rem;
+  color: #888;
+  margin-top: 4px;
+  white-space: nowrap;
+  text-align: center;
+}
+.step-node.active .step-label { color: var(--accent, #6c63ff); font-weight: 600; }
+.step-node.done   .step-label { color: #4caf50; }
+
+/* Card panel */
+.wizard-card {
+  background: var(--card-bg, #1a1a2e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.wizard-card-header {
+  padding: 1.25rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--border, #2a2a3e);
+}
+.wizard-card-header h2 { margin: 0 0 .25rem; font-size: 1.1rem; color: var(--text-primary, #e0e0e0); }
+.wizard-card-header p  { margin: 0; font-size: .82rem; color: #888; }
+
+.wizard-card-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+
+.form-group { display: flex; flex-direction: column; gap: .35rem; }
+.form-group label { font-size: .78rem; color: #aaa; font-weight: 600; }
+.form-group .hint  { font-size: .72rem; color: #666; }
+
+.wizard-input {
+  background: var(--input-bg, #12121e);
+  border: 1px solid var(--border, #2a2a3e);
+  border-radius: 7px;
+  color: var(--text-primary, #e0e0e0);
+  font-size: .88rem;
+  padding: .5rem .75rem;
+  outline: none;
+  transition: border-color .15s;
+}
+.wizard-input:focus { border-color: var(--accent, #6c63ff); }
+
+.wizard-card-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border, #2a2a3e);
+  display: flex;
+  gap: .75rem;
+  align-items: center;
+}
+
+.btn-wiz {
+  padding: .48rem 1.2rem;
+  border-radius: 7px;
+  border: none;
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.btn-wiz:hover:not(:disabled) { opacity: .85; }
+.btn-wiz:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary-wiz { background: var(--accent, #6c63ff); color: #fff; }
+.btn-secondary-wiz { background: transparent; color: #aaa; border: 1px solid #333; }
+.btn-test   { background: #1a2a1a; color: #4caf50; border: 1px solid #2a4a2a; }
+
+.test-result {
+  padding: .6rem .85rem;
+  border-radius: 7px;
+  font-size: .8rem;
+  display: none;
+  align-items: center;
+  gap: .5rem;
+}
+.test-result.ok      { background: #1a2a1a; color: #4caf50; border: 1px solid #2a4a2a; display: flex; }
+.test-result.err     { background: #2a1a1a; color: #f44336; border: 1px solid #4a2a2a; display: flex; }
+.test-result.loading { background: #1a1a2a; color: #888;    border: 1px solid #2a2a3e; display: flex; }
+
+.zd-link { font-size: .78rem; color: var(--accent, #6c63ff); text-decoration: none; }
+.zd-link:hover { text-decoration: underline; }
+
+.step-panel { display: none; }
+.step-panel.active { display: block; }
+
+.summary-row {
+  display: flex;
+  gap: .5rem;
+  font-size: .82rem;
+  align-items: center;
+}
+.summary-row .key { color: #888; min-width: 140px; }
+.summary-row .val { color: var(--text-primary, #e0e0e0); font-family: monospace; }
+.summary-row .ok  { color: #4caf50; }
+.summary-row .err { color: #f44336; }
+</style>
+
+<div class="wizard-wrap">
+  <!-- Progress -->
+  <div class="wizard-steps" id="wizSteps">
+    <div class="step-node active" id="sn-1"><div class="step-circle" id="sc-1">1</div><div class="step-label">Zendesk</div></div>
+    <div class="step-node"        id="sn-2"><div class="step-circle" id="sc-2">2</div><div class="step-label">Wasabi</div></div>
+    <div class="step-node"        id="sn-3"><div class="step-circle" id="sc-3">3</div><div class="step-label">Offload Test</div></div>
+    <div class="step-node"        id="sn-4"><div class="step-circle" id="sc-4">4</div><div class="step-label">Backup Test</div></div>
+    <div class="step-node"        id="sn-5"><div class="step-circle" id="sc-5">5</div><div class="step-label">Notifications</div></div>
+  </div>
+
+  <!-- ── STEP 1: Zendesk ───────────────────────────────────────────── -->
+  <div class="step-panel active" id="step-1">
+    <div class="wizard-card">
+      <div class="wizard-card-header">
+        <h2>Step 1 — Zendesk Credentials</h2>
+        <p>Enter your Zendesk subdomain and an API token with read access.</p>
+      </div>
+      <div class="wizard-card-body">
+        <div class="form-group">
+          <label>Zendesk Subdomain</label>
+          <input id="zd-subdomain" class="wizard-input" placeholder="yourcompany"
+                 oninput="updateZdLink()">
+          <div class="hint">Your Zendesk URL is <code>https://<span id="zd-preview">yourcompany</span>.zendesk.com</code></div>
+        </div>
+        <div class="form-group">
+          <label>Admin Email</label>
+          <input id="zd-email" class="wizard-input" type="email" placeholder="admin@company.com">
+        </div>
+        <div class="form-group">
+          <label>API Token
+            <a id="zd-token-link" href="https://yourcompany.zendesk.com/admin/apps-integrations/apis/zendesk-api/settings"
+               target="_blank" class="zd-link" style="margin-left:8px;">Open Zendesk API settings ↗</a>
+          </label>
+          <input id="zd-token" class="wizard-input" type="password" placeholder="your_api_token">
+          <div class="hint">In Zendesk → Admin → Apps &amp; Integrations → Zendesk API → Add API token</div>
+        </div>
+        <div class="form-group">
+          <label>Display Name <span style="color:#666">(optional)</span></label>
+          <input id="zd-display" class="wizard-input" placeholder="My Company Support">
+        </div>
+        <div id="zd-result" class="test-result"></div>
+      </div>
+      <div class="wizard-card-footer">
+        <button class="btn-wiz btn-test" onclick="testZendesk()">Test Connection</button>
+        <button class="btn-wiz btn-primary-wiz" id="zd-next" onclick="goStep(2)" disabled>Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Wasabi ────────────────────────────────────────────── -->
+  <div class="step-panel" id="step-2">
+    <div class="wizard-card">
+      <div class="wizard-card-header">
+        <h2>Step 2 — Wasabi Storage</h2>
+        <p>Configure the two Wasabi buckets: one for attachment offload, one for ticket backup.</p>
+      </div>
+      <div class="wizard-card-body">
+        <div style="font-size:.8rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Offload Bucket (attachments &amp; inline images)</div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <input id="ws-endpoint" class="wizard-input" placeholder="s3.wasabisys.com" value="s3.wasabisys.com">
+        </div>
+        <div class="form-group">
+          <label>Access Key</label>
+          <input id="ws-access" class="wizard-input" placeholder="WASABI_ACCESS_KEY">
+        </div>
+        <div class="form-group">
+          <label>Secret Key</label>
+          <input id="ws-secret" class="wizard-input" type="password" placeholder="WASABI_SECRET_KEY">
+        </div>
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input id="ws-bucket" class="wizard-input" placeholder="my-offload-bucket">
+        </div>
+        <div id="ws-result" class="test-result"></div>
+        <hr style="border-color:#2a2a3e;margin:.5rem 0">
+        <div style="font-size:.8rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Backup Bucket (ticket JSON + HTML)</div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <input id="bk-endpoint" class="wizard-input" placeholder="s3.eu-central-1.wasabisys.com" value="s3.eu-central-1.wasabisys.com">
+        </div>
+        <div class="form-group">
+          <label>Bucket Name</label>
+          <input id="bk-bucket" class="wizard-input" placeholder="my-backup-bucket">
+        </div>
+        <div id="bk-result" class="test-result"></div>
+      </div>
+      <div class="wizard-card-footer">
+        <button class="btn-wiz btn-secondary-wiz" onclick="goStep(1)">← Back</button>
+        <button class="btn-wiz btn-test" onclick="testWasabi()">Test Offload Bucket</button>
+        <button class="btn-wiz btn-test" onclick="testBackup()">Test Backup Bucket</button>
+        <button class="btn-wiz btn-primary-wiz" id="ws-next" onclick="goStep(3)">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Offload test ───────────────────────────────────────── -->
+  <div class="step-panel" id="step-3">
+    <div class="wizard-card">
+      <div class="wizard-card-header">
+        <h2>Step 3 — Offload Test</h2>
+        <p>Enter a Zendesk ticket ID with attachments to verify the end-to-end offload pipeline.</p>
+      </div>
+      <div class="wizard-card-body">
+        <div class="form-group">
+          <label>Ticket ID</label>
+          <input id="ol-ticket" class="wizard-input" placeholder="12345" type="number">
+          <div class="hint">The test will upload up to 2 attachments from this ticket to your Wasabi bucket.</div>
+        </div>
+        <div id="ol-result" class="test-result"></div>
+      </div>
+      <div class="wizard-card-footer">
+        <button class="btn-wiz btn-secondary-wiz" onclick="goStep(2)">← Back</button>
+        <button class="btn-wiz btn-test" onclick="testOffload()">Run Offload Test</button>
+        <button class="btn-wiz btn-primary-wiz" onclick="goStep(4)">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Backup test ───────────────────────────────────────── -->
+  <div class="step-panel" id="step-4">
+    <div class="wizard-card">
+      <div class="wizard-card-header">
+        <h2>Step 4 — Ticket Backup Test</h2>
+        <p>Verify write access to the backup bucket.</p>
+      </div>
+      <div class="wizard-card-body">
+        <div id="bk2-result" class="test-result"></div>
+        <div style="font-size:.82rem;color:#888;">
+          This will write a small test file to <code id="bk-bucket-preview">your-backup-bucket</code>
+          and immediately delete it.
+        </div>
+      </div>
+      <div class="wizard-card-footer">
+        <button class="btn-wiz btn-secondary-wiz" onclick="goStep(3)">← Back</button>
+        <button class="btn-wiz btn-test" onclick="testBackupFull()">Run Backup Test</button>
+        <button class="btn-wiz btn-primary-wiz" onclick="goStep(5)">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 5: Notifications ─────────────────────────────────────── -->
+  <div class="step-panel" id="step-5">
+    <div class="wizard-card">
+      <div class="wizard-card-header">
+        <h2>Step 5 — Notifications <span style="font-size:.78rem;color:#666;font-weight:400;">(optional)</span></h2>
+        <p>Configure Telegram and/or Slack for run reports and alerts.</p>
+      </div>
+      <div class="wizard-card-body">
+        <div class="form-group">
+          <label>Telegram Bot Token</label>
+          <input id="tg-token" class="wizard-input" placeholder="1234567890:AAH...">
+        </div>
+        <div class="form-group">
+          <label>Telegram Chat ID</label>
+          <input id="tg-chat" class="wizard-input" placeholder="-1001234567890">
+        </div>
+        <div class="form-group">
+          <label>Slack Webhook URL</label>
+          <input id="sl-webhook" class="wizard-input" placeholder="https://hooks.slack.com/services/...">
+        </div>
+        <div id="notif-result" class="test-result"></div>
+      </div>
+      <div class="wizard-card-footer">
+        <button class="btn-wiz btn-secondary-wiz" onclick="goStep(4)">← Back</button>
+        <button class="btn-wiz btn-test" onclick="testNotifications()">Test Notifications</button>
+        <button class="btn-wiz btn-primary-wiz" id="save-btn" onclick="saveTenant()">💾 Save &amp; Finish</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SAVED ──────────────────────────────────────────────────────── -->
+  <div class="step-panel" id="step-done">
+    <div class="wizard-card" style="text-align:center;padding:2.5rem 1.5rem;">
+      <div style="font-size:3rem;margin-bottom:.5rem;">🎉</div>
+      <h2 style="color:#4caf50;margin:0 0 .5rem;">Tenant Created!</h2>
+      <p id="done-msg" style="color:#888;margin:0 0 1.5rem;"></p>
+      <div style="display:flex;gap:1rem;justify-content:center;">
+        <a id="done-open" href="/tenants" class="btn-wiz btn-primary-wiz" style="text-decoration:none;">Open Dashboard</a>
+        <a href="{{ url_for('tenants_overview') }}" class="btn-wiz btn-secondary-wiz" style="text-decoration:none;">All Tenants</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentStep = 1;
+const STEPS = 5;
+
+function goStep(n) {
+  document.getElementById('step-' + currentStep).classList.remove('active');
+  document.getElementById('sn-' + currentStep).classList.remove('active');
+  if (n > currentStep) document.getElementById('sn-' + currentStep).classList.add('done');
+  currentStep = n;
+  const target = document.getElementById('step-' + n) || document.getElementById('step-done');
+  target.classList.add('active');
+  document.getElementById('sn-' + Math.min(n, STEPS))?.classList.add('active');
+  // Update backup bucket preview
+  if (n === 4) {
+    document.getElementById('bk-bucket-preview').textContent =
+      document.getElementById('bk-bucket').value || 'your-backup-bucket';
+  }
+}
+
+function updateZdLink() {
+  const sub = document.getElementById('zd-subdomain').value.trim() || 'yourcompany';
+  document.getElementById('zd-preview').textContent = sub;
+  document.getElementById('zd-token-link').href =
+    `https://${sub}.zendesk.com/admin/apps-integrations/apis/zendesk-api/settings`;
+}
+
+function showResult(id, ok, msg) {
+  const el = document.getElementById(id);
+  el.className = 'test-result ' + (ok === null ? 'loading' : ok ? 'ok' : 'err');
+  el.textContent = ok === null ? '⏳ ' + msg : ok ? '✓ ' + msg : '✗ ' + msg;
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function testZendesk() {
+  showResult('zd-result', null, 'Testing…');
+  document.getElementById('zd-next').disabled = true;
+  const d = await post('/api/wizard/test_zendesk', {
+    subdomain: document.getElementById('zd-subdomain').value.trim(),
+    email:     document.getElementById('zd-email').value.trim(),
+    api_token: document.getElementById('zd-token').value.trim(),
+  });
+  showResult('zd-result', d.success, d.message);
+  if (d.success) document.getElementById('zd-next').disabled = false;
+}
+
+async function testWasabi() {
+  showResult('ws-result', null, 'Testing…');
+  const d = await post('/api/wizard/test_wasabi', {
+    endpoint:   document.getElementById('ws-endpoint').value.trim(),
+    access_key: document.getElementById('ws-access').value.trim(),
+    secret_key: document.getElementById('ws-secret').value.trim(),
+    bucket:     document.getElementById('ws-bucket').value.trim(),
+  });
+  showResult('ws-result', d.success, d.message);
+}
+
+async function testBackup() {
+  showResult('bk-result', null, 'Testing…');
+  const d = await post('/api/wizard/test_wasabi', {
+    endpoint:   document.getElementById('bk-endpoint').value.trim(),
+    access_key: document.getElementById('ws-access').value.trim(),
+    secret_key: document.getElementById('ws-secret').value.trim(),
+    bucket:     document.getElementById('bk-bucket').value.trim(),
+  });
+  showResult('bk-result', d.success, d.message);
+}
+
+async function testOffload() {
+  showResult('ol-result', null, 'Running offload test…');
+  const d = await post('/api/wizard/test_offload', {
+    ticket_id:         document.getElementById('ol-ticket').value.trim(),
+    zendesk_subdomain: document.getElementById('zd-subdomain').value.trim(),
+    zendesk_email:     document.getElementById('zd-email').value.trim(),
+    zendesk_api_token: document.getElementById('zd-token').value.trim(),
+    wasabi_endpoint:   document.getElementById('ws-endpoint').value.trim(),
+    wasabi_access_key: document.getElementById('ws-access').value.trim(),
+    wasabi_secret_key: document.getElementById('ws-secret').value.trim(),
+    wasabi_bucket:     document.getElementById('ws-bucket').value.trim(),
+  });
+  showResult('ol-result', d.success, d.message);
+}
+
+async function testBackupFull() {
+  showResult('bk2-result', null, 'Testing backup bucket…');
+  const d = await post('/api/wizard/test_backup', {
+    backup_endpoint:  document.getElementById('bk-endpoint').value.trim(),
+    wasabi_access_key: document.getElementById('ws-access').value.trim(),
+    wasabi_secret_key: document.getElementById('ws-secret').value.trim(),
+    backup_bucket:    document.getElementById('bk-bucket').value.trim(),
+  });
+  showResult('bk2-result', d.success, d.message);
+}
+
+async function testNotifications() {
+  showResult('notif-result', null, 'Testing…');
+  const d = await post('/api/wizard/test_notifications', {
+    telegram_bot_token: document.getElementById('tg-token').value.trim(),
+    telegram_chat_id:   document.getElementById('tg-chat').value.trim(),
+    slack_webhook_url:  document.getElementById('sl-webhook').value.trim(),
+  });
+  const results = d.results || {};
+  const parts = Object.entries(results).map(([k, v]) => `${k}: ${v}`);
+  showResult('notif-result', d.success, parts.join(' | '));
+}
+
+async function saveTenant() {
+  document.getElementById('save-btn').disabled = true;
+  const d = await post('/api/wizard/save', {
+    zendesk_subdomain:  document.getElementById('zd-subdomain').value.trim(),
+    zendesk_email:      document.getElementById('zd-email').value.trim(),
+    zendesk_api_token:  document.getElementById('zd-token').value.trim(),
+    display_name:       document.getElementById('zd-display').value.trim(),
+    wasabi_endpoint:    document.getElementById('ws-endpoint').value.trim(),
+    wasabi_access_key:  document.getElementById('ws-access').value.trim(),
+    wasabi_secret_key:  document.getElementById('ws-secret').value.trim(),
+    wasabi_bucket:      document.getElementById('ws-bucket').value.trim(),
+    backup_endpoint:    document.getElementById('bk-endpoint').value.trim(),
+    backup_bucket:      document.getElementById('bk-bucket').value.trim(),
+    telegram_bot_token: document.getElementById('tg-token').value.trim(),
+    telegram_chat_id:   document.getElementById('tg-chat').value.trim(),
+    slack_webhook_url:  document.getElementById('sl-webhook').value.trim(),
+  });
+  if (d.success) {
+    document.getElementById('done-msg').textContent = d.message;
+    document.getElementById('done-open').href = `/t/${d.slug}/dashboard`;
+    goStep('done');
+    // Mark all step nodes as done
+    for (let i = 1; i <= STEPS; i++) {
+      document.getElementById('sn-' + i)?.classList.remove('active');
+      document.getElementById('sn-' + i)?.classList.add('done');
+    }
+  } else {
+    showResult('notif-result', false, d.message);
+    document.getElementById('save-btn').disabled = false;
+  }
+}
+</script>
+{% endblock %}
