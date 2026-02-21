@@ -823,6 +823,7 @@ def tenant_settings(slug):
 
 
 @app.route('/')
+@app.route('/dashboard')
 @login_required
 def index():
     """Dashboard"""
