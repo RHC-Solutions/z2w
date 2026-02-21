@@ -1,131 +1,292 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — z2w{% endblock %}
+{% block title %}Dashboard — {{ cfg.display_name if cfg else slug }}{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
-{% block page_sub %}Zendesk to Wasabi offload overview{% endblock %}
-{% block topbar_actions %}{% endblock %}
+{% block page_sub %}{{ cfg.zendesk_subdomain if cfg else slug }}.zendesk.com · auto-refreshes every 60 s{% endblock %}
+{% block topbar_actions %}
+<span id="refresh-countdown" style="font-size:12px;color:var(--muted-foreground);display:flex;align-items:center;gap:5px;">
+  <svg id="refresh-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  <span id="refresh-secs">60</span>s
+</span>
+<button class="btn btn-outline btn-sm" onclick="runOffloadNow()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+  Run Offload
+</button>
+<button class="btn btn-outline btn-sm" onclick="runBackupNow()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  Run Backup
+</button>
+{% endblock %}
 
 {% block content %}
-<div class="stat-grid">
+
+{# ── Error banner ────────────────────────────────────────────────── #}
+{% if errors_today > 0 or error_tickets %}
+<div class="alert alert-danger" id="errorBanner" style="margin-bottom:18px">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+  <div style="flex:1">
+    {% if errors_today > 0 %}<strong>{{ errors_today }} error{{ 's' if errors_today != 1 else '' }} today</strong>{% endif %}
+    {% if error_tickets %}<strong>{{ error_tickets|length }} ticket{{ 's' if error_tickets|length != 1 else '' }} with errors</strong> — see the Errors tab below{% endif %}
+    <button style="float:right;cursor:pointer;opacity:.6;background:none;border:none;color:inherit;font-size:16px;line-height:1" onclick="document.getElementById('errorBanner').style.display='none'">✕</button>
+  </div>
+</div>
+{% endif %}
+
+{# ── Headline stat cards ──────────────────────────────────────────── #}
+<div class="stat-grid" style="margin-bottom:18px">
+
   <div class="stat-card primary">
     <div class="stat-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
-      Tickets Processed
+      Tickets Offloaded
     </div>
-    <div class="stat-value">{{ total_processed }}</div>
+    <div class="stat-value" id="st-tickets">{{ '{:,}'.format(total_tickets) }}</div>
+    <div class="stat-sub" id="st-att">{{ '{:,}'.format(total_attachments) }} attach · {{ '{:,}'.format(total_inlines) }} inline</div>
   </div>
+
   <div class="stat-card success">
     <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-      Attachments Uploaded
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+      Saved to Wasabi
     </div>
-    <div class="stat-value">{{ total_attachments }}</div>
+    <div class="stat-value" id="st-bytes">{{ (total_bytes / 1073741824)|round(2) }} GB</div>
+    <div class="stat-sub">{{ '{:,}'.format(total_attachments + total_inlines) }} files total</div>
   </div>
-  <div class="stat-card" id="offloadSchedulerCard">
-    <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      Attachment Offload Scheduler
-    </div>
-    <div class="stat-value" style="font-size:16px" id="offload-scheduler-status">Loading…</div>
-    <div class="stat-sub" id="offload-next-run"></div>
-    <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="btn btn-success btn-xs" onclick="startScheduler()">Start</button>
-      <button class="btn btn-destructive btn-xs" onclick="stopScheduler()">Stop</button>
-    </div>
-  </div>
-  <div class="stat-card" id="backupSchedulerCard">
+
+  <div class="stat-card {% if backup_failed > 0 %}warning{% else %}success{% endif %}">
     <div class="stat-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Tickets Backup Scheduler
+      Closed Tickets Backed Up
     </div>
-    <div class="stat-value" style="font-size:16px" id="backup-scheduler-status">Loading…</div>
-    <div class="stat-sub" id="backup-next-run"></div>
-    <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="btn btn-success btn-xs" onclick="startBackupScheduler()">Start</button>
-      <button class="btn btn-destructive btn-xs" onclick="stopBackupScheduler()">Stop</button>
-    </div>
+    <div class="stat-value" id="st-backup">{{ '{:,}'.format(backup_success) }}</div>
+    <div class="stat-sub">{{ (backup_bytes / 1073741824)|round(2) }} GB · {% if backup_failed > 0 %}<span style="color:var(--destructive)">{{ backup_failed }} failed</span>{% else %}0 failed{% endif %}</div>
   </div>
-  <div class="stat-card info" id="ticketsBackupCard">
-    <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Tickets Backup
-    </div>
-    <div class="stat-value" id="tickets-backup-count">Loading…</div>
-    <div class="stat-sub" id="tickets-backup-last-run">Last run: Loading…</div>
-    <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="btn btn-primary btn-xs" onclick="runBackupNow()">Run Backup Now</button>
-    </div>
-  </div>
+
   <div class="stat-card">
     <div class="stat-label">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-      Ticket Cache
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Last Offload
     </div>
-    {% if cache_total %}
-    <div class="stat-value" style="font-size:18px">{{ "{:,}".format(cache_total) }}</div>
-    <div class="stat-sub">Last sync: {% if cache_last_sync %}{{ cache_last_sync.strftime('%d-%m-%Y %H:%M') }}{% else %}never{% endif %}</div>
-    {% else %}
-    <div class="stat-value text-muted" style="font-size:14px">Not synced</div>
-    <div class="stat-sub">Sync runs with daily offload</div>
-    {% endif %}
-    <div style="margin-top:8px">
-      <button class="btn btn-outline btn-xs" onclick="syncCache()" id="syncCacheBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        Sync Now
-      </button>
+    <div class="stat-value" style="font-size:18px" id="st-ago">{{ last_offload_ago or 'Never' }}</div>
+    <div class="stat-sub" id="st-sched">
+      {% if scheduler_running %}<span style="color:var(--success)">● Running</span>{% if offload_next %} · next {{ offload_next.strftime('%H:%M') }}{% endif %}{% else %}<span style="color:var(--muted-foreground)">● Stopped</span>{% endif %}
     </div>
+  </div>
+
+  <div class="stat-card {% if error_tickets %}danger{% elif errors_today > 0 %}warning{% endif %}">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      Ticket Errors
+    </div>
+    <div class="stat-value" id="st-errors">{{ error_tickets|length }}</div>
+    <div class="stat-sub">{{ errors_today }} error{{ 's' if errors_today != 1 else '' }} today · {{ total_runs }} runs</div>
+  </div>
+
+  <div class="stat-card">
+    <div class="stat-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Today's Activity
+    </div>
+    <div class="stat-value" style="font-size:18px" id="st-today-t">{{ today_tickets }}</div>
+    <div class="stat-sub" id="st-today-sub">{{ today_attachments }} attach · {{ today_inlines }} inline · {{ today_runs }} run{{ 's' if today_runs != 1 else '' }}</div>
+  </div>
+
+</div>
+
+{# ── Row 2: Scheduler controls + Daily report ─────────────────────── #}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div class="card-title">Scheduler</div>
+        <div class="card-desc">Offload every 5 min · Backup nightly</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-success btn-sm" onclick="startScheduler()">Start</button>
+        <button class="btn btn-secondary btn-sm" onclick="stopScheduler()">Stop</button>
+        <button class="btn btn-outline btn-sm" onclick="runOffloadNow()">Run Now</button>
+      </div>
+    </div>
+    <div class="card-body" style="padding:14px 18px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);margin-bottom:4px">Offload</div>
+          <div style="font-size:14px;font-weight:600" id="offload-status-txt">
+            {% if scheduler_running %}<span style="color:var(--success)">● Running</span>{% else %}<span style="color:var(--muted-foreground)">● Stopped</span>{% endif %}
+          </div>
+          <div style="font-size:12px;color:var(--muted-foreground);margin-top:3px" id="offload-next-txt">
+            {% if offload_next %}Next: {{ offload_next.strftime('%H:%M') }} UTC{% endif %}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);margin-bottom:4px">Backup</div>
+          <div style="font-size:14px;font-weight:600" id="backup-status-txt">
+            {% if scheduler_running %}<span style="color:var(--success)">● Running</span>{% else %}<span style="color:var(--muted-foreground)">● Stopped</span>{% endif %}
+          </div>
+          <div style="font-size:12px;color:var(--muted-foreground);margin-top:3px" id="backup-next-txt">
+            {% if backup_next %}Next: {{ backup_next.strftime('%H:%M') }} UTC{% endif %}
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-foreground)">
+        Cache: {{ '{:,}'.format(cache_total) }} tickets
+        · last sync: {% if cache_last_sync %}{{ cache_last_sync.strftime('%d-%m %H:%M') }}{% else %}never{% endif %}
+        <button class="btn btn-ghost btn-xs" style="margin-left:6px" onclick="syncCache()">Sync</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Today's Report — {{ now.strftime('%d %b %Y') }}</div>
+      <div class="card-desc">UTC · resets at midnight</div>
+    </div>
+    <div class="card-body" style="padding:12px 18px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+        <div style="text-align:center">
+          <div style="font-size:22px;font-weight:700;color:var(--primary)" id="dr-tickets">{{ today_tickets }}</div>
+          <div style="font-size:10px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.05em">Tickets</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:22px;font-weight:700;color:var(--success)" id="dr-att">{{ today_attachments }}</div>
+          <div style="font-size:10px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.05em">Attachments</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:22px;font-weight:700;color:var(--primary)" id="dr-inline">{{ today_inlines }}</div>
+          <div style="font-size:10px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.05em">Inlines</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:22px;font-weight:700;{% if errors_today > 0 %}color:var(--destructive){% else %}color:var(--success){% endif %}" id="dr-errors">{{ errors_today }}</div>
+          <div style="font-size:10px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.05em">Errors Today</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted-foreground)">
+        {% if last_log %}
+          Last run: <strong>{{ last_offload_ago }}</strong> · {{ last_log.run_date.strftime('%d-%m-%Y %H:%M') }} UTC
+          · <span class="badge badge-{{ 'success' if last_log.status == 'completed' else 'warning' }}">{{ last_log.status }}</span>
+        {% else %}No runs yet{% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ── Tabs: Tickets · Offload Runs · Backup Runs · Errors ──────────── #}
+<div class="tabs" id="mainTabs" style="margin-bottom:0">
+  <button class="tab-btn active" onclick="switchTab('tab-tickets',this)">
+    Tickets <span class="badge badge-secondary" style="margin-left:4px">{{ '{:,}'.format(total_tickets) }}</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('tab-offload',this)">
+    Offload Runs <span class="badge badge-secondary" style="margin-left:4px">{{ recent_logs|length }}</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('tab-backup',this)">
+    Backup Runs <span class="badge badge-secondary" style="margin-left:4px">{{ recent_backup_runs|length }}</span>
+  </button>
+  {% if error_tickets %}
+  <button class="tab-btn" onclick="switchTab('tab-errors',this)" style="color:var(--destructive)">
+    Errors <span class="badge badge-danger" style="margin-left:4px">{{ error_tickets|length }}</span>
+  </button>
+  {% endif %}
+</div>
+
+{# ────── Tickets tab ───────────────────────────────────────────────── #}
+<div id="tab-tickets" class="tab-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 8px;flex-wrap:wrap;gap:8px">
+    <div style="font-size:12px;color:var(--muted-foreground)">Latest 50 of {{ '{:,}'.format(total_tickets) }} · <a href="{{ url_for('tenant_tickets', slug=slug) }}" style="color:var(--primary)">view all</a></div>
+    <input type="text" id="tkSearch" class="form-control" placeholder="Search ticket ID or subject…"
+           style="max-width:240px;height:30px;font-size:12px" oninput="filterTickets()">
+  </div>
+  <div class="table-wrap">
+    <table id="tkTable">
+      <thead>
+        <tr>
+          <th style="width:80px">Ticket</th>
+          <th>Subject</th>
+          <th style="width:85px">ZD Status</th>
+          <th style="width:90px">Offloaded</th>
+          <th style="width:65px">Attach</th>
+          <th style="width:65px">Inline</th>
+          <th style="width:95px">Backup</th>
+          <th style="width:105px">Backed Up</th>
+          <th>Files in Wasabi</th>
+        </tr>
+      </thead>
+      <tbody id="tkTbody">
+        {% for row in ticket_rows %}
+        {% set wfiles = (row.wasabi_files | fromjson) if row.wasabi_files else [] %}
+        {% set inline_cnt = namespace(n=0) %}
+        {% for f in wfiles %}{% if '/inlines/' in f %}{% set inline_cnt.n = inline_cnt.n + 1 %}{% endif %}{% endfor %}
+        <tr data-search="{{ row.ticket_id }} {{ (row.subject or '')|lower }}">
+          <td>
+            <a href="https://{{ subdomain }}.zendesk.com/agent/tickets/{{ row.ticket_id }}"
+               target="_blank" rel="noopener"
+               style="color:var(--primary);font-family:monospace;font-size:12px">#{{ row.ticket_id }}</a>
+          </td>
+          <td class="truncate" style="max-width:200px;font-size:12.5px" title="{{ row.subject }}">{{ row.subject or '—' }}</td>
+          <td>
+            {% if row.zd_status %}<span class="badge badge-{{ 'success' if row.zd_status in ('open','new') else 'secondary' }}">{{ row.zd_status }}</span>{% else %}—{% endif %}
+          </td>
+          <td>
+            {% if row.offload_status == 'processed' %}<span class="badge badge-success">✓ yes</span>
+            {% elif row.error_message %}<span class="badge badge-danger">error</span>
+            {% else %}<span class="badge badge-secondary">{{ row.offload_status or '—' }}</span>{% endif %}
+          </td>
+          <td style="text-align:right;font-size:12.5px">{{ row.attachments_count or 0 }}</td>
+          <td style="text-align:right;font-size:12.5px">{{ inline_cnt.n }}</td>
+          <td>
+            <span class="badge badge-{{ 'success' if row.backup_status == 'success' else 'danger' if row.backup_status == 'failed' else 'secondary' }}">
+              {{ 'backed up' if row.backup_status == 'success' else row.backup_status if row.backup_status != 'not_backed_up' else '—' }}
+            </span>
+          </td>
+          <td style="font-size:11.5px;font-family:monospace;color:var(--muted-foreground)">
+            {% if row.last_backup_at %}{{ row.last_backup_at.strftime('%d-%m %H:%M') }}{% else %}—{% endif %}
+          </td>
+          <td style="font-size:11.5px">
+            {% if wfiles %}
+              {% for key in wfiles[:3] %}
+                <a href="#" onclick="openPresign(event,'{{ slug }}','{{ key }}','offload')"
+                   style="color:var(--primary);text-decoration:none;display:inline-block;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle"
+                   title="{{ key }}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="vertical-align:middle;margin-right:2px"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>{{ key.split('/')[-1] }}</a>&thinsp;
+              {% endfor %}
+              {% if wfiles|length > 3 %}<span style="color:var(--muted-foreground);font-size:11px">+{{ wfiles|length - 3 }}</span>{% endif %}
+            {% else %}<span style="color:var(--muted-foreground)">—</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-muted text-center" style="padding:32px">No tickets processed yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 
-<div class="mt-6">
-  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div class="section-heading" style="margin-bottom:0;border:none">Recent Offload Runs</div>
-    <div class="flex items-center gap-2 flex-wrap">
-      <input type="text" id="logSearch" class="form-control" placeholder="Search…" style="max-width:180px;height:30px;font-size:12px" oninput="filterLogs()">
-      <select id="logStatusFilter" class="form-select" style="height:30px;font-size:12px;width:auto;min-width:100px" onchange="filterLogs()">
-        <option value="">All statuses</option>
-        <option value="completed">Completed</option>
-        <option value="running">Running</option>
-        <option value="error">Error</option>
-      </select>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table id="logsTable">
+{# ────── Offload Runs tab ──────────────────────────────────────────── #}
+<div id="tab-offload" class="tab-panel" style="display:none">
+  <div class="table-wrap" style="margin-top:10px">
+    <table>
       <thead>
         <tr>
-          <th class="sortable" data-col="date" onclick="sortLogs('date')">Date <span class="sort-icon">↕</span></th>
-          <th class="sortable" data-col="tickets" onclick="sortLogs('tickets')">Tickets <span class="sort-icon">↕</span></th>
-          <th class="sortable" data-col="attachments" onclick="sortLogs('attachments')">Attachments <span class="sort-icon">↕</span></th>
-          <th class="sortable" data-col="inline" onclick="sortLogs('inline')">Inline <span class="sort-icon">↕</span></th>
-          <th class="sortable" data-col="errors" onclick="sortLogs('errors')">Errors <span class="sort-icon">↕</span></th>
+          <th>Date / Time (UTC)</th>
+          <th>Tickets</th>
+          <th>Attachments</th>
+          <th>Inlines</th>
+          <th>Errors</th>
           <th>Status</th>
-          <th>Report</th>
+          <th>Report Sent</th>
         </tr>
       </thead>
-      <tbody id="logsTbody">
+      <tbody>
         {% for log in recent_logs %}
         {% set d = (log.details | fromjson) if log.details else {} %}
-        <tr data-date="{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}"
-            data-tickets="{{ log.tickets_processed }}"
-            data-attachments="{{ log.attachments_uploaded }}"
-            data-inline="{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}"
-            data-errors="{{ log.errors_count or 0 }}"
-            data-status="{{ log.status }}">
+        <tr>
           <td class="font-mono">{{ log.run_date.strftime('%d-%m-%Y %H:%M') }}</td>
           <td>{{ log.tickets_processed }}</td>
           <td>{{ log.attachments_uploaded }}</td>
-          <td>{% if d.get('inlines_uploaded', log.inlines_uploaded or 0) > 0 %}<span class="badge badge-primary">{{ d.get('inlines_uploaded', log.inlines_uploaded or 0) }}</span>{% else %}0{% endif %}</td>
+          <td>{% set il = d.get('inlines_uploaded', log.inlines_uploaded or 0) %}{% if il > 0 %}<span class="badge badge-primary">{{ il }}</span>{% else %}0{% endif %}</td>
           <td>{% if log.errors_count %}<span class="text-destructive font-semibold">{{ log.errors_count }}</span>{% else %}0{% endif %}</td>
-          <td>
-            <span class="badge badge-{{ 'success' if log.status == 'completed' else 'warning' }}">{{ log.status }}</span>
-          </td>
-          <td>
-            {% if log.report_sent %}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--success)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            {% else %}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--muted-foreground)"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-            {% endif %}
-          </td>
+          <td><span class="badge badge-{{ 'success' if log.status == 'completed' else 'warning' }}">{{ log.status }}</span></td>
+          <td>{% if log.report_sent %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color:var(--success)"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>{% else %}<span style="color:var(--muted-foreground)">—</span>{% endif %}</td>
         </tr>
         {% else %}
         <tr><td colspan="7" class="text-muted text-center" style="padding:24px">No runs yet</td></tr>
@@ -135,94 +296,152 @@
   </div>
 </div>
 
-<!-- Recheck modal -->
-<div class="modal-overlay" id="recheckModal">
-  <div class="modal-box">
-    <div class="modal-title">🔁 Recheck All Tickets</div>
-    <div class="modal-body">This will scan <strong>all Zendesk tickets</strong> and re-process any that still have attachments not yet offloaded.<br><br>Runs in the background — check the <a href="{{ url_for('recheck_report') }}" style="color:var(--primary)">Recheck Report</a> for progress.</div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('recheckModal')">Cancel</button>
-      <button class="btn btn-warning btn-sm" id="recheckConfirmBtn">Start Recheck</button>
-    </div>
+{# ────── Backup Runs tab ───────────────────────────────────────────── #}
+<div id="tab-backup" class="tab-panel" style="display:none">
+  <div class="table-wrap" style="margin-top:10px">
+    <table>
+      <thead>
+        <tr>
+          <th>Date / Time (UTC)</th>
+          <th>Scanned</th>
+          <th>Backed Up</th>
+          <th>Files</th>
+          <th>Size</th>
+          <th>Errors</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in recent_backup_runs %}
+        <tr>
+          <td class="font-mono">{{ run.run_date.strftime('%d-%m-%Y %H:%M') }}</td>
+          <td>{{ run.tickets_scanned or 0 }}</td>
+          <td>{{ run.tickets_backed_up or 0 }}</td>
+          <td>{{ run.files_uploaded or 0 }}</td>
+          <td>{{ ((run.bytes_uploaded or 0) / 1048576)|round(1) }} MB</td>
+          <td>{% if run.errors_count %}<span class="text-destructive">{{ run.errors_count }}</span>{% else %}0{% endif %}</td>
+          <td><span class="badge badge-{{ 'success' if run.status == 'completed' else 'warning' }}">{{ run.status or 'completed' }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-muted text-center" style="padding:24px">No backup runs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 
-<!-- Backup modal -->
-<div class="modal-overlay" id="backupModal">
-  <div class="modal-box">
-    <div class="modal-title">💾 Create Backup</div>
-    <div class="modal-body">A full backup will be created and sent to <strong>Telegram</strong> and <strong>Slack</strong>.<br><br>This may take up to a minute.</div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('backupModal')">Cancel</button>
-      <button class="btn btn-primary btn-sm" id="backupConfirmBtn">Create Backup</button>
-    </div>
+{# ────── Errors tab ────────────────────────────────────────────────── #}
+{% if error_tickets %}
+<div id="tab-errors" class="tab-panel" style="display:none">
+  <div class="table-wrap" style="margin-top:10px">
+    <table>
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Error</th>
+          <th>Processed At</th>
+          <th style="width:110px">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in error_tickets %}
+        <tr>
+          <td>
+            <a href="https://{{ subdomain }}.zendesk.com/agent/tickets/{{ t.ticket_id }}"
+               target="_blank" rel="noopener"
+               style="color:var(--primary);font-family:monospace">#{{ t.ticket_id }}</a>
+          </td>
+          <td style="font-size:12px;color:var(--destructive);max-width:360px" class="truncate" title="{{ t.error_message }}">{{ t.error_message }}</td>
+          <td class="font-mono">{{ t.processed_at.strftime('%d-%m-%Y %H:%M') if t.processed_at else '—' }}</td>
+          <td>
+            <button class="btn btn-outline btn-xs" onclick="reoffload({{ t.ticket_id }},this)">Re-offload</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
+{% endif %}
 
 <script>
-function updateSchedulerStatus() {
-  fetch('/api/scheduler/status').then(r=>r.json()).then(data=>{
-    const el = document.getElementById('scheduler-status');
-    el.textContent = data.running ? 'Running' : 'Stopped';
-    el.style.color = data.running ? 'var(--success)' : 'var(--muted-foreground)';
-    if (data.next_run) document.getElementById('next-run').textContent = 'Next: ' + fmtDT(data.next_run);
-  });
+/* ── Tab switching ──────────────────────────────────────── */
+function switchTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.style.display='none'; });
+  document.querySelectorAll('#mainTabs .tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  document.getElementById(id).style.display = '';
+  btn.classList.add('active');
 }
-function runNow() {
-  fetch('/api/run_now',{method:'POST'}).then(r=>r.json()).then(d=>{
-    showToast(d.message, d.success?'success':'danger');
-    if(d.success) setTimeout(()=>location.reload(),1500);
-  });
-}
-function startScheduler() { fetch('/api/scheduler/start',{method:'POST'}).then(r=>r.json()).then(d=>{ showToast(d.message,d.success?'success':'danger'); updateSchedulerStatus(); }); }
-function stopScheduler()  { fetch('/api/scheduler/stop', {method:'POST'}).then(r=>r.json()).then(d=>{ showToast(d.message,d.success?'success':'danger'); updateSchedulerStatus(); }); }
-function syncCache() {
-  const btn=document.getElementById('syncCacheBtn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Syncing…';
-  fetch('/api/sync_ticket_cache',{method:'POST'}).then(r=>r.json()).then(d=>{
-    showToast(d.message||'Sync started', d.success?'info':'danger');
-    setTimeout(()=>{ btn.disabled=false; btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Sync Now'; },5000);
-  }).catch(()=>{ btn.disabled=false; btn.innerHTML='Sync Now'; });
-}
-document.getElementById('recheckConfirmBtn').addEventListener('click',function(){
-  closeModal('recheckModal'); showToast('Starting recheck…','info');
-  fetch('/api/recheck_all',{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(d.success) setTimeout(()=>window.location.href='/recheck_report',800);
-    else showToast(d.message,'danger');
-  });
-});
-document.getElementById('backupConfirmBtn').addEventListener('click',function(){
-  closeModal('backupModal'); showToast('Backup started…','info');
-  fetch('/api/backup_now',{method:'POST'}).then(r=>r.json()).then(d=>showToast(d.message,d.success?'success':'danger'));
-});
-updateSchedulerStatus();
-setInterval(updateSchedulerStatus,30000);
 
-/* ── Sort & Filter for Offload Runs table ── */
-var _sortCol='date', _sortDir='desc';
-function sortLogs(col){
-  if(_sortCol===col) _sortDir=_sortDir==='asc'?'desc':'asc';
-  else { _sortCol=col; _sortDir='desc'; }
-  document.querySelectorAll('#logsTable th.sortable .sort-icon').forEach(function(el){el.textContent='↕';});
-  var th=document.querySelector('#logsTable th[data-col="'+col+'"] .sort-icon');
-  if(th) th.textContent=_sortDir==='asc'?'↑':'↓';
-  var tbody=document.getElementById('logsTbody');
-  var rows=Array.from(tbody.querySelectorAll('tr[data-date]'));
-  rows.sort(function(a,b){
-    var av=a.dataset[col]||'', bv=b.dataset[col]||'';
-    if(col==='date') return _sortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);
-    var an=parseFloat(av)||0, bn=parseFloat(bv)||0;
-    return _sortDir==='asc'?an-bn:bn-an;
+/* ── Ticket filter ─────────────────────────────────────── */
+function filterTickets() {
+  var q = (document.getElementById('tkSearch').value || '').toLowerCase();
+  document.querySelectorAll('#tkTbody tr[data-search]').forEach(function(tr) {
+    tr.style.display = (!q || tr.dataset.search.includes(q)) ? '' : 'none';
   });
-  rows.forEach(function(r){tbody.appendChild(r);});
 }
-function filterLogs(){
-  var q=(document.getElementById('logSearch').value||'').toLowerCase();
-  var st=(document.getElementById('logStatusFilter').value||'').toLowerCase();
-  document.querySelectorAll('#logsTbody tr[data-date]').forEach(function(tr){
-    var txt=tr.textContent.toLowerCase();
-    var match=(!q||txt.indexOf(q)!==-1)&&(!st||tr.dataset.status===st);
-    tr.style.display=match?'':'none';
+
+/* ── Auto-refresh countdown ────────────────────────────── */
+var _secs = 60;
+setInterval(function() {
+  _secs--;
+  var el = document.getElementById('refresh-secs');
+  if (el) el.textContent = _secs;
+  if (_secs <= 0) { _secs = 60; refreshStats(); }
+}, 1000);
+
+function refreshStats() {
+  fetch('/api/t/{{ slug }}/dashboard_stats')
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.error) return;
+      setText('st-tickets', fmt(d.total_tickets));
+      setText('st-att', fmt(d.total_attachments) + ' attach · ' + fmt(d.total_inlines) + ' inline');
+      setText('st-bytes', (d.total_bytes/1073741824).toFixed(2) + ' GB');
+      setText('st-backup', fmt(d.backup_success));
+      setText('st-ago', d.last_offload_ago || 'Never');
+      setText('st-errors', d.error_tickets_count != null ? d.error_tickets_count : d.errors_today);
+      setText('st-today-t', d.today_tickets);
+      setText('dr-tickets', d.today_tickets);
+      setText('dr-att', d.today_att);
+      setText('dr-errors', d.errors_today);
+      var stHtml = d.scheduler_running
+        ? '<span style="color:var(--success)">● Running</span>'
+        : '<span style="color:var(--muted-foreground)">● Stopped</span>';
+      setHtml('offload-status-txt', stHtml);
+      setHtml('backup-status-txt', stHtml);
+      if (d.offload_next) setHtml('offload-next-txt', 'Next: ' + fmtTime(d.offload_next) + ' UTC');
+      if (d.backup_next)  setHtml('backup-next-txt',  'Next: ' + fmtTime(d.backup_next)  + ' UTC');
+    });
+}
+function setText(id,v){ var e=document.getElementById(id); if(e) e.textContent=v; }
+function setHtml(id,v){ var e=document.getElementById(id); if(e) e.innerHTML=v; }
+function fmt(n){ return (n||0).toLocaleString(); }
+
+/* ── Scheduler / actions ───────────────────────────────── */
+function startScheduler(){ fetch('/api/scheduler/start',{method:'POST'}).then(r=>r.json()).then(function(d){ showToast(d.message,d.success?'success':'danger'); refreshStats(); }); }
+function stopScheduler() { fetch('/api/scheduler/stop', {method:'POST'}).then(r=>r.json()).then(function(d){ showToast(d.message,d.success?'success':'danger'); refreshStats(); }); }
+function runOffloadNow() { fetch('/api/run_now',{method:'POST'}).then(r=>r.json()).then(function(d){ showToast(d.message,d.success?'success':'danger'); if(d.success) setTimeout(refreshStats,4000); }); }
+function runBackupNow()  { fetch('/api/ticket_backup_now',{method:'POST'}).then(r=>r.json()).then(function(d){ showToast(d.message,d.success?'success':'danger'); }); }
+function syncCache()     { fetch('/api/sync_ticket_cache',{method:'POST'}).then(r=>r.json()).then(function(d){ showToast(d.message||'Sync started',d.success?'info':'danger'); }); }
+
+function reoffload(tid, btn) {
+  btn.disabled=true; btn.textContent='…';
+  fetch('/api/offload_ticket/'+tid,{method:'POST'}).then(r=>r.json()).then(function(d){
+    showToast((d.success?'✓ ':'✗ ')+d.message, d.success?'success':'danger');
+    btn.disabled=false; btn.textContent='Re-offload';
   });
+}
+
+/* ── Presigned file links ──────────────────────────────── */
+function openPresign(evt, slug, key, bucket_type) {
+  evt.preventDefault();
+  fetch('/api/t/'+slug+'/bucket/presign?key='+encodeURIComponent(key)+'&bucket_type='+bucket_type)
+    .then(r=>r.json())
+    .then(function(d){
+      if(d.url) window.open(d.url,'_blank');
+      else showToast('Could not get link: '+(d.error||'?'),'danger');
+    });
 }
 </script>
 {% endblock %}

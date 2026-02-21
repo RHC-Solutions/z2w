@@ -553,8 +553,8 @@ def tenants_overview():
             if card['errors_today'] > 5:
                 card['red_flags'].append(f'{card["errors_today"]} offload errors')
             tdb.close()
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning(f"tenants_overview: stats query failed for {t.slug}: {_e}", exc_info=True)
         cards.append(card)
 
     # Fleet-level summary for the overview header
@@ -825,17 +825,6 @@ def wizard_save():
 
 # ── Per-tenant route aliases (/t/{slug}/... → existing view functions) ────────
 
-@app.route('/t/<slug>/')
-@app.route('/t/<slug>/dashboard')
-@login_required
-def tenant_dashboard(slug):
-    from flask import g
-    g.tenant_slug = slug
-    from tenant_manager import get_tenant_config
-    g.tenant_cfg = get_tenant_config(slug)
-    return index()
-
-
 @app.route('/t/<slug>/tickets')
 @login_required
 def tenant_tickets(slug):
@@ -1063,43 +1052,214 @@ def api_bucket_presign(slug):
 @app.route('/dashboard')
 @login_required
 def index():
-    """Dashboard"""
-    db = get_db()
+    from flask import g as _g
+    slug = getattr(_g, 'tenant_slug', None)
+    if slug:
+        return redirect(url_for('tenant_dashboard', slug=slug))
+    # No tenant context — try first active tenant
     try:
-        # Get statistics
-        total_processed = db.query(ProcessedTicket).count()
-        total_attachments = db.query(ProcessedTicket).filter(
-            ProcessedTicket.status == 'processed'
-        ).with_entities(
-            func.sum(ProcessedTicket.attachments_count)
-        ).scalar() or 0
+        from tenant_manager import list_tenants
+        active = [t for t in list_tenants() if t.is_active]
+        if active:
+            return redirect(url_for('tenant_dashboard', slug=active[0].slug))
+    except Exception:
+        pass
+    return redirect(url_for('tenants_overview'))
 
-        # Ticket cache stats
-        cache_total = db.query(ZendeskTicketCache).count()
-        from sqlalchemy import func as sqlfunc
+
+def _build_dashboard_data(slug):
+    """Gather all data for the combined dashboard for a given tenant slug."""
+    import json as _json
+    from tenant_manager import get_tenant_config, get_tenant_db_session
+    from sqlalchemy import func as sqlfunc
+    from datetime import timedelta
+
+    cfg = get_tenant_config(slug)
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    db = get_tenant_db_session(slug)
+    try:
+        # ── Headline stats ─────────────────────────────────────────────
+        total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
+        att_row = db.query(
+            sqlfunc.sum(ProcessedTicket.attachments_count),
+            sqlfunc.sum(ProcessedTicket.wasabi_files_size),
+        ).first()
+        total_attachments = int(att_row[0] or 0)
+        total_bytes = int(att_row[1] or 0)
+
+        total_inlines = db.query(sqlfunc.sum(OffloadLog.inlines_uploaded)).scalar() or 0
+        total_runs = db.query(sqlfunc.count(OffloadLog.id)).scalar() or 0
+        errors_today = db.query(sqlfunc.sum(OffloadLog.errors_count))\
+            .filter(OffloadLog.run_date >= today_start).scalar() or 0
+
+        # Backup stats
+        backup_success = db.query(sqlfunc.count(TicketBackupItem.id))\
+            .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+        backup_failed = db.query(sqlfunc.count(TicketBackupItem.id))\
+            .filter(TicketBackupItem.backup_status == 'failed').scalar() or 0
+        backup_bytes = db.query(sqlfunc.sum(TicketBackupItem.total_bytes))\
+            .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+
+        # Ticket cache
+        cache_total = db.query(sqlfunc.count(ZendeskTicketCache.id)).scalar() or 0
         cache_last_sync = db.query(sqlfunc.max(ZendeskTicketCache.cached_at)).scalar()
+        closed_count = db.query(sqlfunc.count(ZendeskTicketCache.id))\
+            .filter(ZendeskTicketCache.status == 'closed').scalar() or 0
 
-        recent_logs = db.query(OffloadLog).order_by(
-            OffloadLog.run_date.desc()
-        ).all()
+        # ── Today's summary ────────────────────────────────────────────
+        today_runs = db.query(sqlfunc.count(OffloadLog.id))\
+            .filter(OffloadLog.run_date >= today_start).scalar() or 0
+        today_tickets = db.query(sqlfunc.sum(OffloadLog.tickets_processed))\
+            .filter(OffloadLog.run_date >= today_start).scalar() or 0
+        today_attachments = db.query(sqlfunc.sum(OffloadLog.attachments_uploaded))\
+            .filter(OffloadLog.run_date >= today_start).scalar() or 0
+        today_inlines = db.query(sqlfunc.sum(OffloadLog.inlines_uploaded))\
+            .filter(OffloadLog.run_date >= today_start).scalar() or 0
 
-        # Get scheduler status
-        sched = init_scheduler()
-        next_run = None
-        if sched.scheduler.running:
-            jobs = sched.scheduler.get_jobs()
-            if jobs:
-                next_run = jobs[0].next_run_time
+        # ── Last offload run ───────────────────────────────────────────
+        last_log = db.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
+        last_offload_ago = None
+        if last_log and last_log.run_date:
+            diff = now - last_log.run_date
+            mins = int(diff.total_seconds() // 60)
+            if mins < 60:
+                last_offload_ago = f'{mins}m ago'
+            elif mins < 1440:
+                last_offload_ago = f'{mins // 60}h ago'
+            else:
+                last_offload_ago = f'{mins // 1440}d ago'
 
-        return render_template('dashboard.html',
-                             total_processed=total_processed,
-                             total_attachments=total_attachments,
-                             recent_logs=recent_logs,
-                             next_run=next_run,
-                             cache_total=cache_total,
-                             cache_last_sync=cache_last_sync)
+        # ── Last backup run ────────────────────────────────────────────
+        last_bak = db.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
+
+        # ── Error tickets (tickets with error_message set) ─────────────
+        error_tickets = db.query(ProcessedTicket)\
+            .filter(ProcessedTicket.error_message.isnot(None),
+                    ProcessedTicket.error_message != '')\
+            .order_by(ProcessedTicket.processed_at.desc()).limit(20).all()
+
+        # ── Recent offload runs (last 20) ──────────────────────────────
+        recent_logs = db.query(OffloadLog)\
+            .order_by(OffloadLog.run_date.desc()).limit(20).all()
+
+        # ── Recent backup runs (last 10) ───────────────────────────────
+        recent_backup_runs = db.query(TicketBackupRun)\
+            .order_by(TicketBackupRun.run_date.desc()).limit(10).all()
+
+        # ── Unified ticket table — most recently processed ─────────────
+        # Join ProcessedTicket with ZendeskTicketCache + TicketBackupItem
+        # Use raw SQL for the LEFT JOIN
+        from sqlalchemy import text as sa_text
+        page = 1
+        per_page = 50
+        ticket_rows = db.execute(sa_text("""
+            SELECT
+                p.ticket_id,
+                p.processed_at,
+                p.attachments_count,
+                p.wasabi_files,
+                p.wasabi_files_size,
+                p.status      AS offload_status,
+                p.error_message,
+                COALESCE(c.subject, '') AS subject,
+                COALESCE(c.status, '') AS zd_status,
+                COALESCE(b.backup_status, 'not_backed_up') AS backup_status,
+                b.last_backup_at,
+                COALESCE(b.s3_prefix, '') AS s3_prefix,
+                COALESCE(b.files_count, 0) AS backup_files,
+                COALESCE(b.total_bytes, 0) AS backup_bytes
+            FROM processed_tickets p
+            LEFT JOIN zendesk_ticket_cache c ON c.ticket_id = p.ticket_id
+            LEFT JOIN ticket_backup_items b  ON b.ticket_id = p.ticket_id
+            ORDER BY p.processed_at DESC
+            LIMIT :lim OFFSET :off
+        """), {'lim': per_page, 'off': 0}).fetchall()
+
+        total_ticket_rows = total_tickets  # use count already computed
+
+        # ── Zendesk subdomain for ticket links ─────────────────────────
+        subdomain = (cfg.zendesk_subdomain if cfg else '') or slug
+
+        return dict(
+            slug=slug,
+            cfg=cfg,
+            now=now,
+            # Headlines
+            total_tickets=total_tickets,
+            total_attachments=total_attachments,
+            total_bytes=total_bytes,
+            total_inlines=int(total_inlines),
+            total_runs=total_runs,
+            errors_today=int(errors_today),
+            # Backup
+            backup_success=backup_success,
+            backup_failed=backup_failed,
+            backup_bytes=int(backup_bytes),
+            # Cache
+            cache_total=cache_total,
+            cache_last_sync=cache_last_sync,
+            closed_count=closed_count,
+            # Today
+            today_runs=today_runs,
+            today_tickets=int(today_tickets or 0),
+            today_attachments=int(today_attachments or 0),
+            today_inlines=int(today_inlines or 0),
+            # Last runs
+            last_log=last_log,
+            last_offload_ago=last_offload_ago,
+            last_bak=last_bak,
+            # Errors
+            error_tickets=error_tickets,
+            # Tables
+            recent_logs=recent_logs,
+            recent_backup_runs=recent_backup_runs,
+            ticket_rows=ticket_rows,
+            subdomain=subdomain,
+        )
     finally:
         db.close()
+
+
+@app.route('/t/<slug>/')
+@app.route('/t/<slug>/dashboard')
+@login_required
+def tenant_dashboard(slug):
+    """Combined dashboard: offload + backup + storage + errors + scheduler."""
+    from flask import g
+    from tenant_manager import get_tenant_config
+    g.tenant_slug = slug
+    g.tenant_cfg = get_tenant_config(slug)
+
+    try:
+        data = _build_dashboard_data(slug)
+    except Exception as exc:
+        logger.error(f'Dashboard data error for {slug}: {exc}', exc_info=True)
+        data = {'slug': slug, 'cfg': g.tenant_cfg, 'error': str(exc)}
+
+    # Scheduler status (global, not per-tenant)
+    sched = init_scheduler()
+    offload_running = sched.scheduler.running
+    offload_next = None
+    backup_next = None
+    try:
+        job = sched.scheduler.get_job('continuous_offload')
+        if job and job.next_run_time:
+            offload_next = job.next_run_time
+        bak_job = sched.scheduler.get_job('ticket_backup')
+        if bak_job and bak_job.next_run_time:
+            backup_next = bak_job.next_run_time
+    except Exception:
+        pass
+
+    return render_template(
+        'dashboard.html',
+        **data,
+        scheduler_running=offload_running,
+        offload_next=offload_next,
+        backup_next=backup_next,
+    )
 
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
@@ -2141,7 +2301,106 @@ def explorer_zendesk_proxy():
 @app.route('/logs')
 @login_required
 def logs():
-    """View offload logs"""
+    """Unified log viewer — reads rotated app.log.YYYY-MM-DD files from logs/."""
+    import os as _os, re as _re
+    from config import BASE_DIR
+
+    slug = getattr(_flask_g, 'tenant_slug', None) or ''
+    logs_dir = BASE_DIR / 'logs'
+
+    # Enumerate available log dates (app.log.YYYY-MM-DD + today's app.log)
+    available_dates = []
+    today_str = datetime.utcnow().strftime('%Y-%m-%d')
+    if (logs_dir / 'app.log').exists():
+        available_dates.append(today_str)
+    for fname in sorted(_os.listdir(str(logs_dir)), reverse=True):
+        m = _re.match(r'^app\.log\.(\d{4}-\d{2}-\d{2})$', fname)
+        if m:
+            available_dates.append(m.group(1))
+    # deduplicate while preserving order
+    seen = set()
+    available_dates = [d for d in available_dates if not (d in seen or seen.add(d))]
+
+    selected_date = request.args.get('date', today_str)
+    level_filter = (request.args.get('level', '') or '').upper()
+    search_q = (request.args.get('q', '') or '').strip().lower()
+    page = request.args.get('page', 1, type=int)
+    per_page = 200
+
+    # Read the selected log file
+    if selected_date == today_str:
+        log_file = logs_dir / 'app.log'
+    else:
+        log_file = logs_dir / f'app.log.{selected_date}'
+
+    raw_lines = []
+    if log_file.exists():
+        try:
+            with open(str(log_file), 'r', errors='replace') as fh:
+                raw_lines = fh.readlines()
+        except Exception as exc:
+            logger.warning(f'Could not read log file {log_file}: {exc}')
+
+    # Parse lines into structured entries
+    log_pattern = _re.compile(
+        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+-\s+\S+\s+-\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+-\s+(.*)$'
+    )
+    entries = []
+    current = None
+    for raw in raw_lines:
+        raw = raw.rstrip('\n')
+        m = log_pattern.match(raw)
+        if m:
+            if current:
+                entries.append(current)
+            current = {'ts': m.group(1), 'level': m.group(2), 'msg': m.group(3), 'extra': []}
+        else:
+            if current and raw.strip():
+                current['extra'].append(raw)
+
+    if current:
+        entries.append(current)
+
+    # Most-recent first
+    entries.reverse()
+
+    # Filter
+    if level_filter:
+        entries = [e for e in entries if e['level'] == level_filter]
+    if search_q:
+        entries = [e for e in entries
+                   if search_q in e['msg'].lower() or
+                      any(search_q in x.lower() for x in e['extra'])]
+
+    total = len(entries)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, pages))
+    paged = entries[(page - 1) * per_page: page * per_page]
+
+    # Level counts for the filter tabs
+    from collections import Counter
+    level_counts = Counter(e['level'] for e in entries)
+
+    return render_template(
+        'logs.html',
+        slug=slug,
+        entries=paged,
+        total=total,
+        page=page,
+        pages=pages,
+        per_page=per_page,
+        available_dates=available_dates,
+        selected_date=selected_date,
+        level_filter=level_filter,
+        search_q=search_q,
+        level_counts=level_counts,
+    )
+
+
+@app.route('/logs_old')
+@login_required
+def logs_old():
+    """Old log viewer kept as fallback"""
     import json
     db = get_db()
     try:
@@ -2283,6 +2542,103 @@ def logs():
                                all_statuses=sorted(all_statuses))
     finally:
         db.close()
+
+
+@app.route('/api/t/<slug>/dashboard_stats')
+@login_required
+def api_dashboard_stats(slug):
+    """JSON stats for live dashboard auto-refresh (every 60s)."""
+    try:
+        from sqlalchemy import func as sqlfunc
+        from tenant_manager import get_tenant_db_session
+        from datetime import timedelta
+
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        db = get_tenant_db_session(slug)
+        try:
+            total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
+            att_row = db.query(
+                sqlfunc.sum(ProcessedTicket.attachments_count),
+                sqlfunc.sum(ProcessedTicket.wasabi_files_size),
+            ).first()
+            total_attachments = int(att_row[0] or 0)
+            total_bytes = int(att_row[1] or 0)
+            total_inlines = int(db.query(sqlfunc.sum(OffloadLog.inlines_uploaded)).scalar() or 0)
+            errors_today = int(db.query(sqlfunc.sum(OffloadLog.errors_count))
+                               .filter(OffloadLog.run_date >= today_start).scalar() or 0)
+            backup_success = db.query(sqlfunc.count(TicketBackupItem.id))\
+                .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+            today_tickets = int(db.query(sqlfunc.sum(OffloadLog.tickets_processed))
+                               .filter(OffloadLog.run_date >= today_start).scalar() or 0)
+            today_att = int(db.query(sqlfunc.sum(OffloadLog.attachments_uploaded))
+                           .filter(OffloadLog.run_date >= today_start).scalar() or 0)
+
+            last_log = db.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
+            last_offload_ago = None
+            if last_log and last_log.run_date:
+                diff = now - last_log.run_date
+                mins = int(diff.total_seconds() // 60)
+                if mins < 60:
+                    last_offload_ago = f'{mins}m ago'
+                elif mins < 1440:
+                    last_offload_ago = f'{mins // 60}h ago'
+                else:
+                    last_offload_ago = f'{mins // 1440}d ago'
+
+            # Recent errors (last 5)
+            recent_errors = []
+            err_tickets = db.query(ProcessedTicket)\
+                .filter(ProcessedTicket.error_message.isnot(None),
+                        ProcessedTicket.error_message != '')\
+                .order_by(ProcessedTicket.processed_at.desc()).limit(5).all()
+            for t in err_tickets:
+                recent_errors.append({
+                    'ticket_id': t.ticket_id,
+                    'error': t.error_message,
+                    'ts': t.processed_at.isoformat() if t.processed_at else None,
+                })
+            error_tickets_count = db.query(sqlfunc.count(ProcessedTicket.id))\
+                .filter(ProcessedTicket.error_message.isnot(None),
+                        ProcessedTicket.error_message != '').scalar() or 0
+        finally:
+            db.close()
+
+        # Scheduler status
+        sched = init_scheduler()
+        offload_next = None
+        backup_next = None
+        try:
+            job = sched.scheduler.get_job('continuous_offload')
+            if job and job.next_run_time:
+                offload_next = job.next_run_time.isoformat()
+            bak_job = sched.scheduler.get_job('ticket_backup')
+            if bak_job and bak_job.next_run_time:
+                backup_next = bak_job.next_run_time.isoformat()
+        except Exception:
+            pass
+
+        return jsonify({
+            'total_tickets': total_tickets,
+            'total_attachments': total_attachments,
+            'total_bytes': total_bytes,
+            'total_inlines': total_inlines,
+            'errors_today': errors_today,
+            'error_tickets_count': error_tickets_count,
+            'backup_success': backup_success,
+            'today_tickets': today_tickets,
+            'today_att': today_att,
+            'last_offload_ago': last_offload_ago,
+            'scheduler_running': sched.scheduler.running,
+            'offload_next': offload_next,
+            'backup_next': backup_next,
+            'recent_errors': recent_errors,
+        })
+    except Exception as exc:
+        logger.error(f'Dashboard stats error for {slug}: {exc}', exc_info=True)
+        return jsonify({'error': str(exc)}), 500
+
 
 @app.route('/privacy')
 def privacy():

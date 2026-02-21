@@ -405,7 +405,7 @@
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <a href="http://192.168.21.251:5000/" style="display:flex;align-items:center;gap:10px;text-decoration:none;min-width:0;flex:1;" title="Go to home">
+      <a href="http://192.168.21.251:5000/" style="display:flex;align-items:center;gap:3px;text-decoration:none;min-width:0;flex:1;" title="Go to home">
         <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w" class="sidebar-logo">
         <div style="min-width:0;line-height:1.2;">
           <div class="sidebar-title">Z2W</div>
@@ -460,31 +460,6 @@
                  class="nav-item nav-sub {% if request.endpoint in ('tenant_logs','logs') and _t.slug == _cur_slug %}active{% endif %}">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
                 <span>Logs</span>
-              </a>
-              <a href="{{ url_for('tenant_tickets', slug=_t.slug) }}"
-                 class="nav-item nav-sub {% if request.endpoint in ('tenant_tickets','tickets') and _t.slug == _cur_slug %}active{% endif %}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3a1 1 0 0 0 1 1h1a2 2 0 0 0 0-4H3a1 1 0 0 0-1 1Z"/><path d="M22 10v3a1 1 0 0 1-1 1h-1a2 2 0 0 1 0-4h1a1 1 0 0 1 1 1Z"/><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
-                <span>Tickets</span>
-              </a>
-              <a href="{{ url_for('tenant_storage', slug=_t.slug) }}"
-                 class="nav-item nav-sub {% if request.endpoint in ('tenant_storage','storage_report') and _t.slug == _cur_slug %}active{% endif %}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
-                <span>Storage</span>
-              </a>
-              <a href="{{ url_for('tenant_bucket_browser', slug=_t.slug) }}"
-                 class="nav-item nav-sub {% if request.endpoint == 'tenant_bucket_browser' and _t.slug == _cur_slug %}active{% endif %}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg>
-                <span>Bucket Browser</span>
-              </a>
-                <a href="{{ url_for('tenant_explorer', slug=_t.slug) }}"
-                  class="nav-item nav-sub {% if request.endpoint in ('tenant_explorer','explorer_app') and _t.slug == _cur_slug %}active{% endif %}">
-                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                 <span>Zendesk Explorer</span>
-                </a>
-              <a href="{{ url_for('tenant_ticket_backup', slug=_t.slug) }}"
-                 class="nav-item nav-sub {% if request.endpoint in ('tenant_ticket_backup','ticket_backup') and _t.slug == _cur_slug %}active{% endif %}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span>Backup</span>
               </a>
               <a href="{{ url_for('tenant_settings', slug=_t.slug) }}"
                  class="nav-item nav-sub {% if request.endpoint == 'tenant_settings' and _t.slug == _cur_slug %}active{% endif %}">
@@ -565,6 +540,18 @@ function _parseDate(d){if(!d)return null;if(d instanceof Date)return d;if(typeof
 function fmtDT(d){var r=_parseDate(d);if(!r)return'—';var dd=String(r.getDate()).padStart(2,'0'),mm=String(r.getMonth()+1).padStart(2,'0'),yy=r.getFullYear(),hh=String(r.getHours()).padStart(2,'0'),mi=String(r.getMinutes()).padStart(2,'0');return dd+'-'+mm+'-'+yy+' '+hh+':'+mi;}
 function fmtTime(d){var r=_parseDate(d);if(!r)return'—';var hh=String(r.getHours()).padStart(2,'0'),mi=String(r.getMinutes()).padStart(2,'0'),ss=String(r.getSeconds()).padStart(2,'0');return hh+':'+mi+':'+ss;}
 const CKEY = 'z2w_sb_collapsed';
+const UI_STATE_VERSION_KEY = 'z2w_ui_state_version';
+const UI_STATE_VERSION = '2026-02-21-1';
+// One-time reset of stale UI state so new defaults are visible immediately
+(function resetUiStateOnce(){
+  try {
+    if (localStorage.getItem(UI_STATE_VERSION_KEY) !== UI_STATE_VERSION) {
+      localStorage.setItem(UI_STATE_VERSION_KEY, UI_STATE_VERSION);
+      localStorage.removeItem(CKEY);
+      Object.keys(localStorage).forEach(function(k){ if (k.indexOf('tnav_') === 0) localStorage.removeItem(k); });
+    }
+  } catch(e) {}
+})();
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');
   const ic = document.getElementById('collapseIcon');
@@ -604,26 +591,12 @@ function toggleTenantNav(slug) {
   const grp = document.getElementById('ntg-' + slug);
   if (!grp) return;
   grp.classList.toggle('expanded');
-  // Persist state: null = expanded (default), '0' = collapsed
-  try {
-    const expanded = grp.classList.contains('expanded');
-    localStorage.setItem('tnav_' + slug, expanded ? '1' : '0');
-  } catch(e) {}
 }
 
-// Restore tenant nav state from localStorage on every page load
-// Default is expanded — only collapse if explicitly stored as '0'
+// Tenant nav is always expanded on page load — user collapse only lasts the session
 (function restoreTenantNavState() {
   document.querySelectorAll('[id^="ntg-"]').forEach(function(grp) {
-    const slug = grp.id.slice(4); // strip "ntg-"
-    let stored;
-    try { stored = localStorage.getItem('tnav_' + slug); } catch(e) {}
-    if (stored === '0') {
-      grp.classList.remove('expanded');
-    } else {
-      // null (never set) or '1' → expanded
-      grp.classList.add('expanded');
-    }
+    grp.classList.add('expanded');
   });
 })();
 </script>

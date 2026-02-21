@@ -440,7 +440,7 @@ class ZendeskClient:
                 # Step 4: Add a private comment with the Wasabi link so the file is still accessible
                 try:
                     link_body = (
-                        f'<p>📎 Inline image offloaded to secure storage: '
+                        f'<p>📎 Image Secured: '
                         f'<a href="{wasabi_url}" target="_blank" rel="noopener noreferrer">{filename}</a></p>'
                     )
                     update_data = {"ticket": {"comment": {"html_body": link_body, "public": False}}}
