@@ -14,6 +14,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -37,6 +38,7 @@ wheels/
 *.swp
 *.swo
 *~
+.pylintrc
 
 # OS
 .DS_Store
@@ -46,8 +48,14 @@ Thumbs.db
 logs/
 *.log
 
+# Node
+node_modules/
+.next/
+
+# Backups & stale files
 backups/
 *.backup-*
+*.bak
 # WAL sidecar files
 *.db-shm
 *.db-wal
