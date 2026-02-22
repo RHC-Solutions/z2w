@@ -505,7 +505,30 @@ class AttachmentOffloader:
                         result["errors"].append(f"Failed to upload inline image {filename} to Wasabi")
                 else:
                     logger.warning(f"[Ticket {ticket_id}] ✗ Download failed for inline image {filename}")
-                    result["errors"].append(f"Failed to download inline image {filename} from {attachment_url}")
+                    # Fallback for expired token URLs: try to redact/remove the dead
+                    # inline image directly from comment HTML so this ticket does not
+                    # fail repeatedly forever.
+                    if (
+                        comment_id
+                        and original_html
+                        and '/attachments/token/' in (attachment_url or '')
+                    ):
+                        redact_only_ok = self.zendesk.redact_inline_image_only_agent_workspace(
+                            ticket_id=ticket_id,
+                            comment_id=comment_id,
+                            original_html=original_html,
+                        )
+                        if redact_only_ok:
+                            result["inlines_deleted"] += 1
+                            logger.info(
+                                f"[Ticket {ticket_id}] ✓ Redacted expired inline token image {filename} after download failure"
+                            )
+                        else:
+                            result["errors"].append(
+                                f"Failed to download inline image {filename} from {attachment_url}; fallback redaction failed"
+                            )
+                    else:
+                        result["errors"].append(f"Failed to download inline image {filename} from {attachment_url}")
             
             except Exception as e:
                 logger.error(f"[Ticket {ticket_id}] ✗ Exception processing inline image {filename}: {e}")

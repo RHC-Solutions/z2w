@@ -1067,7 +1067,7 @@ def index():
     return redirect(url_for('tenants_overview'))
 
 
-def _build_dashboard_data(slug):
+def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
     """Gather all data for the combined dashboard for a given tenant slug."""
     import json as _json
     from tenant_manager import get_tenant_config, get_tenant_db_session
@@ -1135,10 +1135,17 @@ def _build_dashboard_data(slug):
         last_bak = db.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
 
         # ── Error tickets (tickets with error_message set) ─────────────
+        error_tickets_count = db.query(sqlfunc.count(ProcessedTicket.id))\
+            .filter(ProcessedTicket.error_message.isnot(None),
+                ProcessedTicket.error_message != '').scalar() or 0
+        errors_pages = max(1, (int(error_tickets_count) + int(errors_per_page) - 1) // int(errors_per_page))
+        errors_page = max(1, min(int(errors_page or 1), errors_pages))
+        errors_offset = (errors_page - 1) * int(errors_per_page)
         error_tickets = db.query(ProcessedTicket)\
             .filter(ProcessedTicket.error_message.isnot(None),
                     ProcessedTicket.error_message != '')\
-            .order_by(ProcessedTicket.processed_at.desc()).limit(20).all()
+            .order_by(ProcessedTicket.processed_at.desc())\
+            .offset(errors_offset).limit(int(errors_per_page)).all()
 
         # ── Recent offload runs (last 20) ──────────────────────────────
         recent_logs = db.query(OffloadLog)\
@@ -1211,7 +1218,11 @@ def _build_dashboard_data(slug):
             last_offload_ago=last_offload_ago,
             last_bak=last_bak,
             # Errors
+            error_tickets_count=int(error_tickets_count),
             error_tickets=error_tickets,
+            errors_page=errors_page,
+            errors_pages=errors_pages,
+            errors_per_page=int(errors_per_page),
             # Tables
             recent_logs=recent_logs,
             recent_backup_runs=recent_backup_runs,
@@ -1233,30 +1244,50 @@ def tenant_dashboard(slug):
     g.tenant_cfg = get_tenant_config(slug)
 
     try:
-        data = _build_dashboard_data(slug)
+        errors_page = request.args.get('errors_page', 1, type=int)
+        errors_per_page = request.args.get('errors_per_page', 20, type=int)
+        data = _build_dashboard_data(slug, errors_page=errors_page, errors_per_page=errors_per_page)
     except Exception as exc:
         logger.error(f'Dashboard data error for {slug}: {exc}', exc_info=True)
         data = {'slug': slug, 'cfg': g.tenant_cfg, 'error': str(exc)}
 
-    # Scheduler status (global, not per-tenant)
+    # Scheduler status (global scheduler with per-group job controls)
     sched = init_scheduler()
-    offload_running = sched.scheduler.running
+    offload_running = False
+    backup_running = False
     offload_next = None
     backup_next = None
     try:
-        job = sched.scheduler.get_job('continuous_offload')
-        if job and job.next_run_time:
-            offload_next = job.next_run_time
-        bak_job = sched.scheduler.get_job('ticket_backup')
-        if bak_job and bak_job.next_run_time:
-            backup_next = bak_job.next_run_time
+        offload_jobs = [
+            sched.scheduler.get_job('daily_offload'),
+            sched.scheduler.get_job('continuous_offload'),
+        ]
+        offload_jobs = [j for j in offload_jobs if j]
+        offload_running = bool(
+            sched.scheduler.running and any(j.next_run_time is not None for j in offload_jobs)
+        )
+        offload_next_candidates = [j.next_run_time for j in offload_jobs if j.next_run_time]
+        offload_next = min(offload_next_candidates) if offload_next_candidates else None
+
+        backup_jobs = [
+            sched.scheduler.get_job('closed_ticket_backup'),
+            sched.scheduler.get_job('daily_backup'),
+        ]
+        backup_jobs = [j for j in backup_jobs if j]
+        backup_running = bool(
+            sched.scheduler.running and any(j.next_run_time is not None for j in backup_jobs)
+        )
+        backup_next_candidates = [j.next_run_time for j in backup_jobs if j.next_run_time]
+        backup_next = min(backup_next_candidates) if backup_next_candidates else None
     except Exception:
         pass
 
     return render_template(
         'dashboard.html',
         **data,
-        scheduler_running=offload_running,
+        scheduler_running=sched.scheduler.running,
+        offload_scheduler_running=offload_running,
+        backup_scheduler_running=backup_running,
         offload_next=offload_next,
         backup_next=backup_next,
     )
@@ -2574,6 +2605,10 @@ def api_dashboard_stats(slug):
                                .filter(OffloadLog.run_date >= today_start).scalar() or 0)
             today_att = int(db.query(sqlfunc.sum(OffloadLog.attachments_uploaded))
                            .filter(OffloadLog.run_date >= today_start).scalar() or 0)
+            today_inlines = int(db.query(sqlfunc.sum(OffloadLog.inlines_uploaded))
+                               .filter(OffloadLog.run_date >= today_start).scalar() or 0)
+            today_runs = int(db.query(sqlfunc.count(OffloadLog.id))
+                            .filter(OffloadLog.run_date >= today_start).scalar() or 0)
 
             last_log = db.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
             last_offload_ago = None
@@ -2605,17 +2640,36 @@ def api_dashboard_stats(slug):
         finally:
             db.close()
 
-        # Scheduler status
+        # Scheduler status (global scheduler with per-group job controls)
         sched = init_scheduler()
+        offload_scheduler_running = False
+        backup_scheduler_running = False
         offload_next = None
         backup_next = None
         try:
-            job = sched.scheduler.get_job('continuous_offload')
-            if job and job.next_run_time:
-                offload_next = job.next_run_time.isoformat()
-            bak_job = sched.scheduler.get_job('ticket_backup')
-            if bak_job and bak_job.next_run_time:
-                backup_next = bak_job.next_run_time.isoformat()
+            offload_jobs = [
+                sched.scheduler.get_job('daily_offload'),
+                sched.scheduler.get_job('continuous_offload'),
+            ]
+            offload_jobs = [j for j in offload_jobs if j]
+            offload_scheduler_running = bool(
+                sched.scheduler.running and any(j.next_run_time is not None for j in offload_jobs)
+            )
+            offload_next_candidates = [j.next_run_time for j in offload_jobs if j.next_run_time]
+            if offload_next_candidates:
+                offload_next = min(offload_next_candidates).isoformat()
+
+            backup_jobs = [
+                sched.scheduler.get_job('closed_ticket_backup'),
+                sched.scheduler.get_job('daily_backup'),
+            ]
+            backup_jobs = [j for j in backup_jobs if j]
+            backup_scheduler_running = bool(
+                sched.scheduler.running and any(j.next_run_time is not None for j in backup_jobs)
+            )
+            backup_next_candidates = [j.next_run_time for j in backup_jobs if j.next_run_time]
+            if backup_next_candidates:
+                backup_next = min(backup_next_candidates).isoformat()
         except Exception:
             pass
 
@@ -2629,8 +2683,12 @@ def api_dashboard_stats(slug):
             'backup_success': backup_success,
             'today_tickets': today_tickets,
             'today_att': today_att,
+            'today_inlines': today_inlines,
+            'today_runs': today_runs,
             'last_offload_ago': last_offload_ago,
             'scheduler_running': sched.scheduler.running,
+            'offload_scheduler_running': offload_scheduler_running,
+            'backup_scheduler_running': backup_scheduler_running,
             'offload_next': offload_next,
             'backup_next': backup_next,
             'recent_errors': recent_errors,
@@ -2823,6 +2881,19 @@ def run_now():
         sched = init_scheduler()
         sched.run_now()
         return jsonify({'success': True, 'message': 'Offload job started'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/send_daily_report', methods=['POST'])
+@login_required
+def send_daily_report_now():
+    """Manually trigger the daily stats report (Telegram + Slack) in background."""
+    try:
+        sched = init_scheduler()
+        import threading
+        t = threading.Thread(target=sched.daily_stats_job, daemon=True, name='daily-report-manual')
+        t.start()
+        return jsonify({'success': True, 'message': 'Daily report is being sent…'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
@@ -3033,6 +3104,86 @@ def start_scheduler():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+
+def _set_scheduler_group_paused(group: str, paused: bool):
+    """Pause/resume a logical scheduler group by APScheduler job IDs."""
+    sched = init_scheduler()
+    if not sched.scheduler.running:
+        sched.start()
+
+    group_jobs = {
+        'offload': ['daily_offload', 'continuous_offload'],
+        'backup': ['closed_ticket_backup', 'daily_backup'],
+    }
+    job_ids = group_jobs.get(group)
+    if not job_ids:
+        raise ValueError(f'Unknown scheduler group: {group}')
+
+    touched = 0
+    for job_id in job_ids:
+        job = sched.scheduler.get_job(job_id)
+        if not job:
+            continue
+        try:
+            if paused:
+                sched.scheduler.pause_job(job_id)
+            else:
+                sched.scheduler.resume_job(job_id)
+            touched += 1
+        except Exception:
+            # Ignore individual job failures; caller gets aggregate result.
+            pass
+
+    return touched
+
+
+@app.route('/api/scheduler/offload/start', methods=['POST'])
+@login_required
+def start_offload_scheduler_group():
+    try:
+        touched = _set_scheduler_group_paused('offload', paused=False)
+        if touched == 0:
+            return jsonify({'success': False, 'message': 'No offload jobs found to start'})
+        return jsonify({'success': True, 'message': 'Offload scheduler started'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/scheduler/offload/stop', methods=['POST'])
+@login_required
+def stop_offload_scheduler_group():
+    try:
+        touched = _set_scheduler_group_paused('offload', paused=True)
+        if touched == 0:
+            return jsonify({'success': False, 'message': 'No offload jobs found to stop'})
+        return jsonify({'success': True, 'message': 'Offload scheduler stopped'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/scheduler/backup/start', methods=['POST'])
+@login_required
+def start_backup_scheduler_group():
+    try:
+        touched = _set_scheduler_group_paused('backup', paused=False)
+        if touched == 0:
+            return jsonify({'success': False, 'message': 'No backup jobs found to start'})
+        return jsonify({'success': True, 'message': 'Backup scheduler started'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/scheduler/backup/stop', methods=['POST'])
+@login_required
+def stop_backup_scheduler_group():
+    try:
+        touched = _set_scheduler_group_paused('backup', paused=True)
+        if touched == 0:
+            return jsonify({'success': False, 'message': 'No backup jobs found to stop'})
+        return jsonify({'success': True, 'message': 'Backup scheduler stopped'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
 @app.route('/api/scheduler/stop', methods=['POST'])
 @login_required
 def stop_scheduler():
@@ -3052,10 +3203,32 @@ def scheduler_status():
     sched = init_scheduler()
     jobs = sched.scheduler.get_jobs()
     next_run = jobs[0].next_run_time if jobs else None
+
+    offload_jobs = [
+        sched.scheduler.get_job('daily_offload'),
+        sched.scheduler.get_job('continuous_offload'),
+    ]
+    offload_jobs = [j for j in offload_jobs if j]
+    offload_running = bool(sched.scheduler.running and any(j.next_run_time is not None for j in offload_jobs))
+    offload_next_candidates = [j.next_run_time for j in offload_jobs if j.next_run_time]
+    offload_next = min(offload_next_candidates).isoformat() if offload_next_candidates else None
+
+    backup_jobs = [
+        sched.scheduler.get_job('closed_ticket_backup'),
+        sched.scheduler.get_job('daily_backup'),
+    ]
+    backup_jobs = [j for j in backup_jobs if j]
+    backup_running = bool(sched.scheduler.running and any(j.next_run_time is not None for j in backup_jobs))
+    backup_next_candidates = [j.next_run_time for j in backup_jobs if j.next_run_time]
+    backup_next = min(backup_next_candidates).isoformat() if backup_next_candidates else None
     
     return jsonify({
         'running': sched.scheduler.running,
-        'next_run': next_run.isoformat() if next_run else None
+        'next_run': next_run.isoformat() if next_run else None,
+        'offload_running': offload_running,
+        'offload_next': offload_next,
+        'backup_running': backup_running,
+        'backup_next': backup_next,
     })
 
 @app.route('/api/scheduler/update', methods=['POST'])

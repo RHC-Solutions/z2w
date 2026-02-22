@@ -339,7 +339,7 @@
     .text-destructive{color:var(--destructive)}.text-success{color:var(--success)}.text-center{text-align:center}
     .font-mono{font-family:ui-monospace,monospace;font-size:12.5px}.font-semibold{font-weight:600}
     .truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.w-full{width:100%}.hidden{display:none!important}
-    @media(max-width:768px){.form-row-2,.form-row-3,.dash-row-2{grid-template-columns:1fr}}
+    @media(max-width:768px){.form-row-2,.form-row-3{grid-template-columns:1fr}}
 
     /* ── Scrollbar (dark) ──────────────────────────────────── */
     ::-webkit-scrollbar { width: 7px; height: 7px; }

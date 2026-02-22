@@ -459,6 +459,75 @@ class ZendeskClient:
             logger.error(f"[AgentWSRedact] Exception for ticket {ticket_id} comment {comment_id}: {e}", exc_info=True)
             return False
 
+    def redact_inline_image_only_agent_workspace(self, ticket_id: int, comment_id: int, original_html: str) -> bool:
+        """
+        Redact/remove an inline <img> from comment HTML using Agent Workspace
+        redaction API, without adding a Wasabi link.
+
+        Used as a fallback when token-URL inline image content is no longer
+        downloadable (expired token), so the ticket stops failing repeatedly.
+        """
+        if not self.base_url:
+            return False
+
+        try:
+            comments = self.get_ticket_comments(ticket_id)
+            original_comment = None
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    original_comment = comment
+                    break
+
+            if not original_comment:
+                logger.warning(f"[AgentWSRedactOnly] Comment {comment_id} not found for ticket {ticket_id}")
+                return False
+
+            html_body = original_comment.get("html_body", "") or ""
+            if not html_body:
+                logger.warning(f"[AgentWSRedactOnly] Empty html_body for comment {comment_id} in ticket {ticket_id}")
+                return False
+
+            redacted_img = original_html
+            if redacted_img.rstrip().endswith('/>'):
+                redacted_img = redacted_img.rstrip()[:-2].rstrip() + ' redact />'
+            elif redacted_img.rstrip().endswith('>'):
+                redacted_img = redacted_img.rstrip()[:-1].rstrip() + ' redact>'
+
+            modified_html = html_body.replace(original_html, redacted_img)
+            if modified_html == html_body:
+                logger.warning(
+                    f"[AgentWSRedactOnly] Could not locate <img> tag in comment {comment_id} for ticket {ticket_id}"
+                )
+                return False
+
+            url = f"{self.base_url}/comment_redactions/{comment_id}.json"
+            payload = {
+                "ticket_id": ticket_id,
+                "html_body": modified_html,
+            }
+            resp = self.session.put(url, json=payload)
+
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get('Retry-After', 30))
+                logger.warning(f"[AgentWSRedactOnly] Rate-limited, waiting {retry_after}s")
+                time.sleep(retry_after)
+                resp = self.session.put(url, json=payload)
+
+            if resp.ok:
+                logger.info(
+                    f"[AgentWSRedactOnly] ✓ Redacted expired inline image from comment {comment_id} in ticket {ticket_id}"
+                )
+                return True
+
+            logger.warning(
+                f"[AgentWSRedactOnly] ✗ Failed ({resp.status_code}) for comment {comment_id} in ticket {ticket_id}: {resp.text[:300]}"
+            )
+            return False
+
+        except Exception as e:
+            logger.error(f"[AgentWSRedactOnly] Exception for ticket {ticket_id} comment {comment_id}: {e}", exc_info=True)
+            return False
+
     def replace_inline_image_in_comment(self, ticket_id: int, comment_id: int, attachment_id: int, wasabi_url: str, filename: str, original_html: str) -> bool:
         """
         Replace an inline image in a comment with a Wasabi link
