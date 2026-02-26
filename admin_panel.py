@@ -43,16 +43,26 @@ def not_found_error(error):
 
 @app.errorhandler(500)
 def internal_error(error):
+    import traceback as _tb
+    import logging as _logging
+    _log = _logging.getLogger('zendesk_offloader')
+    _log.error(f'Internal Server Error on {request.method} {request.path}: {error}', exc_info=True)
     if request.path.startswith('/api/'):
-        import traceback
-        import logging
-        logger = logging.getLogger('zendesk_offloader')
-        logger.error(f'API error: {str(error)}', exc_info=True)
         return jsonify({
             'success': False,
             'message': 'Internal server error. Please check the logs for details.'
         }), 500
-    return error
+    # Render a friendly error page for browser requests
+    return f"""<!doctype html>
+<html><head><title>Server Error</title>
+<style>body{{font-family:sans-serif;padding:2rem;background:#0f172a;color:#e2e8f0}}
+h1{{color:#f87171}}pre{{background:#1e293b;padding:1rem;border-radius:.5rem;overflow:auto;font-size:.85rem;color:#94a3b8}}</style>
+</head><body>
+<h1>&#9888; Internal Server Error</h1>
+<p>An unexpected error occurred. The error has been logged.</p>
+<pre>{_tb.format_exc()}</pre>
+<p><a href="javascript:history.back()" style="color:#60a5fa">&#8592; Go back</a></p>
+</body></html>""", 500
 
 # Configure logging to reduce noise from static file requests
 import logging
@@ -135,6 +145,7 @@ def _no_cache_html(response):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
+        response.headers['Content-Language'] = 'en'
     return response
 
 
@@ -457,7 +468,8 @@ def logout():
 @login_required
 def tenants_overview():
     """Global tenant management page."""
-    from tenant_manager import list_tenants, get_tenant_config, get_tenant_db_session
+    from tenant_manager import list_tenants, get_tenant_config
+    from database import SessionLocal
     from sqlalchemy import func as sqlfunc
 
     tenant_rows = list_tenants()
@@ -487,9 +499,9 @@ def tenants_overview():
             'storage_bytes': 0,
             'red_flags': [],
         }
-        # Pull stats from per-tenant DB (best-effort)
+        # Pull stats from legacy DB where the offloader writes (best-effort)
         try:
-            tdb = get_tenant_db_session(t.slug)
+            tdb = SessionLocal()
             from database import ProcessedTicket, OffloadLog, TicketBackupItem, TicketBackupRun
             from datetime import timedelta
             now = datetime.utcnow()
@@ -920,6 +932,115 @@ def tenant_settings(slug):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SETTINGS EXPORT / IMPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/settings/export')
+@login_required
+def api_export_tenant_settings(slug):
+    """Download all tenant settings as a JSON file, ready to restore on another server."""
+    import json as _json
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    # Build export payload — exclude computed fields
+    data = cfg.to_dict()
+    data.pop('db_path', None)
+
+    export = {
+        '_meta': {
+            'format': 'z2w-tenant-settings',
+            'version': 1,
+            'exported_at': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'slug': slug,
+        },
+        'settings': data,
+    }
+    response = app.response_class(
+        _json.dumps(export, indent=2, ensure_ascii=False),
+        mimetype='application/json',
+        headers={
+            'Content-Disposition': f'attachment; filename=z2w-{slug}-settings-{datetime.utcnow().strftime("%Y%m%d-%H%M%S")}.json'
+        },
+    )
+    return response
+
+
+@app.route('/api/t/<slug>/settings/import', methods=['POST'])
+@login_required
+def api_import_tenant_settings(slug):
+    """Import tenant settings from a previously exported JSON file."""
+    import json as _json
+    from tenant_manager import get_tenant_config, save_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+
+    # Accept either file upload or JSON body
+    raw = None
+    if request.files.get('file'):
+        raw = request.files['file'].read().decode('utf-8')
+    elif request.is_json:
+        raw = _json.dumps(request.get_json())
+    else:
+        raw = request.get_data(as_text=True)
+
+    if not raw or not raw.strip():
+        return jsonify({'success': False, 'message': 'No data provided'}), 400
+
+    try:
+        payload = _json.loads(raw)
+    except _json.JSONDecodeError as e:
+        return jsonify({'success': False, 'message': f'Invalid JSON: {e}'}), 400
+
+    # Support both wrapped format {"_meta":…, "settings":…} and flat dict
+    if 'settings' in payload and isinstance(payload['settings'], dict):
+        settings = payload['settings']
+    else:
+        settings = payload
+
+    # Apply settings to the current config, skipping slug and db_path
+    from dataclasses import fields as dc_fields
+    valid_fields = {f.name for f in dc_fields(type(cfg))}
+    skip_fields = {'slug', 'db_path'}
+    applied = []
+    skipped = []
+
+    for key, value in settings.items():
+        if key in skip_fields:
+            skipped.append(key)
+            continue
+        if key not in valid_fields:
+            skipped.append(key)
+            continue
+        target_type = type(getattr(cfg, key))
+        try:
+            if target_type == bool:
+                if isinstance(value, bool):
+                    setattr(cfg, key, value)
+                else:
+                    setattr(cfg, key, str(value).lower() in ('1', 'true', 'yes', 'on'))
+            elif target_type == int:
+                setattr(cfg, key, int(value))
+            else:
+                setattr(cfg, key, str(value))
+            applied.append(key)
+        except (ValueError, TypeError):
+            skipped.append(key)
+
+    save_tenant_config(cfg)
+    logger.info(f'Settings imported for {slug}: {len(applied)} applied, {len(skipped)} skipped')
+    return jsonify({
+        'success': True,
+        'message': f'Imported {len(applied)} settings',
+        'applied': applied,
+        'skipped': skipped,
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BUCKET BROWSER  —  /t/<slug>/bucket
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1070,7 +1191,8 @@ def index():
 def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
     """Gather all data for the combined dashboard for a given tenant slug."""
     import json as _json
-    from tenant_manager import get_tenant_config, get_tenant_db_session
+    from tenant_manager import get_tenant_config
+    from database import SessionLocal
     from sqlalchemy import func as sqlfunc
     from datetime import timedelta
 
@@ -1078,7 +1200,7 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    db = get_tenant_db_session(slug)
+    db = SessionLocal()
     try:
         # ── Headline stats ─────────────────────────────────────────────
         total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
@@ -1159,9 +1281,10 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
         # Join ProcessedTicket with ZendeskTicketCache + TicketBackupItem
         # Use raw SQL for the LEFT JOIN
         from sqlalchemy import text as sa_text
+        from types import SimpleNamespace
         page = 1
         per_page = 50
-        ticket_rows = db.execute(sa_text("""
+        _raw_rows = db.execute(sa_text("""
             SELECT
                 p.ticket_id,
                 p.processed_at,
@@ -1183,6 +1306,28 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
             ORDER BY p.processed_at DESC
             LIMIT :lim OFFSET :off
         """), {'lim': per_page, 'off': 0}).fetchall()
+
+        def _parse_dt(val):
+            """Convert SQLite text datetime to Python datetime if needed."""
+            if val is None or isinstance(val, datetime):
+                return val
+            try:
+                s = str(val).replace('T', ' ')
+                for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+                    try:
+                        return datetime.strptime(s[:len(fmt)+4], fmt)
+                    except ValueError:
+                        continue
+            except Exception:
+                pass
+            return val
+
+        ticket_rows = []
+        for r in _raw_rows:
+            ns = SimpleNamespace(**dict(r._mapping))
+            ns.processed_at = _parse_dt(ns.processed_at)
+            ns.last_backup_at = _parse_dt(ns.last_backup_at)
+            ticket_rows.append(ns)
 
         total_ticket_rows = total_tickets  # use count already computed
 
@@ -1529,7 +1674,12 @@ def tickets():
                     ProcessedTicket.wasabi_files.like(like_pattern)
                 )
             )
-        if status_filter:
+        if status_filter == 'has_error':
+            tickets_base_query = tickets_base_query.filter(
+                ProcessedTicket.error_message.isnot(None),
+                ProcessedTicket.error_message != ''
+            )
+        elif status_filter:
             tickets_base_query = tickets_base_query.filter(
                 ProcessedTicket.status == status_filter
             )
@@ -2581,13 +2731,13 @@ def api_dashboard_stats(slug):
     """JSON stats for live dashboard auto-refresh (every 60s)."""
     try:
         from sqlalchemy import func as sqlfunc
-        from tenant_manager import get_tenant_db_session
+        from database import SessionLocal
         from datetime import timedelta
 
         now = datetime.utcnow()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        db = get_tenant_db_session(slug)
+        db = SessionLocal()
         try:
             total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
             att_row = db.query(

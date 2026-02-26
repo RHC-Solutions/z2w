@@ -4,10 +4,20 @@
 {% block page_sub %}{{ cfg.slug }}.zendesk.com{% endblock %}
 
 {% block topbar_actions %}
-<a href="{{ url_for('tenant_dashboard', slug=cfg.slug) }}"
-   style="font-size:.8rem;color:#888;text-decoration:none;display:flex;align-items:center;gap:4px;">
-  ← Dashboard
-</a>
+<div style="display:flex;align-items:center;gap:8px;">
+  <button type="button" class="btn btn-outline btn-sm" onclick="exportSettings()" title="Export all settings as JSON">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Export
+  </button>
+  <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('importModal').classList.add('open')" title="Import settings from JSON">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    Import
+  </button>
+  <a href="{{ url_for('tenant_dashboard', slug=cfg.slug) }}"
+     style="font-size:.8rem;color:#888;text-decoration:none;display:flex;align-items:center;gap:4px;">
+    ← Dashboard
+  </a>
+</div>
 {% endblock %}
 
 {% block content %}
@@ -301,4 +311,77 @@
 
 </div>
 </form>
+
+<!-- Import modal -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal-box">
+    <div class="modal-title">Import Settings</div>
+    <div class="modal-body">
+      Upload a previously exported <code>z2w-*-settings-*.json</code> file to restore all settings for <strong>{{ cfg.display_name }}</strong>.
+      <div style="margin-top:14px">
+        <input type="file" id="importFile" accept=".json,application/json"
+               style="font-size:13px;color:var(--foreground)">
+      </div>
+      <div id="importResult" style="margin-top:12px;font-size:12.5px;display:none"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('importModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="importBtn" onclick="importSettings()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Import
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+function exportSettings() {
+  window.location.href = '/api/t/{{ cfg.slug }}/settings/export';
+}
+
+function importSettings() {
+  var fileInput = document.getElementById('importFile');
+  var resultDiv = document.getElementById('importResult');
+  var btn = document.getElementById('importBtn');
+
+  if (!fileInput.files || !fileInput.files[0]) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<span style="color:var(--destructive)">Please select a JSON file first.</span>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Importing…';
+  resultDiv.style.display = 'none';
+
+  var formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  fetch('/api/t/{{ cfg.slug }}/settings/import', {
+    method: 'POST',
+    body: formData
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    resultDiv.style.display = 'block';
+    if (d.success) {
+      resultDiv.innerHTML = '<span style="color:var(--success)">✓ ' + d.message + '</span>'
+        + (d.skipped && d.skipped.length ? '<br><span style="color:var(--muted-foreground)">Skipped: ' + d.skipped.join(', ') + '</span>' : '');
+      showToast(d.message, 'success');
+      setTimeout(function() { window.location.reload(); }, 1500);
+    } else {
+      resultDiv.innerHTML = '<span style="color:var(--destructive)">✗ ' + d.message + '</span>';
+      showToast(d.message, 'danger');
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Import';
+  })
+  .catch(function(e) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<span style="color:var(--destructive)">Network error: ' + e + '</span>';
+    btn.disabled = false;
+    btn.innerHTML = 'Import';
+  });
+}
+</script>
 {% endblock %}

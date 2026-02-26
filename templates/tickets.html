@@ -4,12 +4,13 @@
 {% block page_sub %}Tickets that have been offloaded to Wasabi{% endblock %}
 
 {% block content %}
-<form method="GET" action="{{ url_for('tickets') }}" class="flex flex-wrap gap-2 mb-4">
+<form method="GET" action="" class="flex flex-wrap gap-2 mb-4">
   <input type="text" class="form-control" name="q" value="{{ q or '' }}" placeholder="Search ticket ID, status, error, file key" style="max-width:320px">
   <select name="status" class="form-select" style="max-width:160px">
     <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
     <option value="processed" {% if status_filter == 'processed' %}selected{% endif %}>Processed</option>
-    <option value="error"     {% if status_filter == 'error'     %}selected{% endif %}>Error</option>
+    <option value="error"     {% if status_filter == 'error'     %}selected{% endif %}>Error status</option>
+    <option value="has_error" {% if status_filter == 'has_error' %}selected{% endif %}>⚠ Has errors</option>
   </select>
   <input type="hidden" name="sort"  value="{{ sort  or 'processed_at' }}">
   <input type="hidden" name="order" value="{{ order or 'desc' }}">
@@ -18,7 +19,7 @@
 </form>
 
 <div class="text-muted text-sm mb-3">
-  Showing {{ tickets.items | length }} of {{ tickets.total }} ticket(s){% if q %} matching <strong>{{ q }}</strong>{% endif %}{% if status_filter %} · status: <strong>{{ status_filter }}</strong>{% endif %}
+  Showing {{ tickets.items | length }} of {{ tickets.total }} ticket(s){% if q %} matching <strong>{{ q }}</strong>{% endif %}{% if status_filter %} · filter: <strong>{{ 'has errors' if status_filter == 'has_error' else status_filter }}</strong>{% endif %}
 </div>
 
 {% macro sort_link(col, label) %}
