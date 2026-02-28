@@ -18,45 +18,57 @@ logger = logging.getLogger('zendesk_offloader')
 class TicketBackupManager:
     """Back up closed Zendesk ticket metadata + attachments to a Wasabi bucket."""
 
-    def __init__(self):
-        from config import (
-            ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN,
-            WASABI_ACCESS_KEY, WASABI_SECRET_KEY,
-            TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET,
-        )
-        self._zd_subdomain = ZENDESK_SUBDOMAIN
-        self._zd_email = ZENDESK_EMAIL
-        self._zd_token = ZENDESK_API_TOKEN
-        self._wb_access_key = WASABI_ACCESS_KEY
-        self._wb_secret_key = WASABI_SECRET_KEY
-        self._wb_endpoint = TICKET_BACKUP_ENDPOINT
-        self._wb_bucket = TICKET_BACKUP_BUCKET
+    def __init__(self, tenant_config=None):
+        if tenant_config is not None:
+            # Per-tenant mode: use tenant config directly and route DB to the
+            # right tenant DB via thread-local.
+            from database import set_current_tenant
+            set_current_tenant(tenant_config.slug)
+
+            self._zd_subdomain = tenant_config.zendesk_subdomain
+            self._zd_email = tenant_config.zendesk_email
+            self._zd_token = tenant_config.zendesk_api_token
+            self._wb_access_key = tenant_config.wasabi_access_key
+            self._wb_secret_key = tenant_config.wasabi_secret_key
+            endpoint = tenant_config.ticket_backup_endpoint or ''
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f'https://{endpoint}'
+            self._wb_endpoint = endpoint
+            self._wb_bucket = tenant_config.ticket_backup_bucket
+        else:
+            from config import (
+                ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN,
+                WASABI_ACCESS_KEY, WASABI_SECRET_KEY,
+                TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET,
+            )
+            self._zd_subdomain = ZENDESK_SUBDOMAIN
+            self._zd_email = ZENDESK_EMAIL
+            self._zd_token = ZENDESK_API_TOKEN
+            self._wb_access_key = WASABI_ACCESS_KEY
+            self._wb_secret_key = WASABI_SECRET_KEY
+            self._wb_endpoint = TICKET_BACKUP_ENDPOINT
+            self._wb_bucket = TICKET_BACKUP_BUCKET
         self.zendesk: Optional[ZendeskClient] = None
 
     # ── private helpers ────────────────────────────────────────────────────
 
     def _build_wasabi_client(self) -> WasabiClient:
-        from config import (
-            WASABI_ACCESS_KEY, WASABI_SECRET_KEY,
-            TICKET_BACKUP_ENDPOINT, TICKET_BACKUP_BUCKET,
-        )
-        endpoint = TICKET_BACKUP_ENDPOINT or self._wb_endpoint
-        if not endpoint.startswith('http'):
+        endpoint = self._wb_endpoint or ''
+        if endpoint and not endpoint.startswith('http'):
             endpoint = f'https://{endpoint}'
         return WasabiClient(
             endpoint=endpoint,
-            access_key=WASABI_ACCESS_KEY or self._wb_access_key,
-            secret_key=WASABI_SECRET_KEY or self._wb_secret_key,
-            bucket_name=TICKET_BACKUP_BUCKET or self._wb_bucket,
+            access_key=self._wb_access_key,
+            secret_key=self._wb_secret_key,
+            bucket_name=self._wb_bucket,
         )
 
     def _get_zendesk(self) -> ZendeskClient:
-        from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
         if self.zendesk is None:
             self.zendesk = ZendeskClient(
-                subdomain=ZENDESK_SUBDOMAIN or self._zd_subdomain,
-                email=ZENDESK_EMAIL or self._zd_email,
-                api_token=ZENDESK_API_TOKEN or self._zd_token,
+                subdomain=self._zd_subdomain,
+                email=self._zd_email,
+                api_token=self._zd_token,
             )
         return self.zendesk
 
@@ -79,6 +91,9 @@ class TicketBackupManager:
         self, db, ticket_id: int, closed_at, backup_status: str,
         s3_prefix: str, files_count: int, total_bytes: int, last_error
     ):
+        from sqlalchemy.exc import IntegrityError
+        # Always expire any cached state to avoid stale reads
+        db.expire_all()
         row = db.query(TicketBackupItem).filter_by(ticket_id=ticket_id).first()
         if row is None:
             row = TicketBackupItem(ticket_id=ticket_id)
@@ -91,6 +106,21 @@ class TicketBackupManager:
         row.last_error = str(last_error) if last_error else None
         if closed_at and row.closed_at is None:
             row.closed_at = closed_at
+        try:
+            db.flush()
+        except IntegrityError:
+            # Race condition: another thread inserted first — rollback and update
+            db.rollback()
+            row = db.query(TicketBackupItem).filter_by(ticket_id=ticket_id).first()
+            if row:
+                row.backup_status = backup_status
+                row.last_backup_at = datetime.utcnow()
+                row.s3_prefix = s3_prefix
+                row.files_count = files_count
+                row.total_bytes = total_bytes
+                row.last_error = str(last_error) if last_error else None
+                if closed_at and row.closed_at is None:
+                    row.closed_at = closed_at
 
     @staticmethod
     def _ticket_closed_datetime(ticket: dict) -> Optional[datetime]:

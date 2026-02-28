@@ -76,10 +76,10 @@ export default function DashboardPage() {
             <RefreshCw size={11} className="animate-spin" style={{ animationDuration: "3s" }} />
             {countdown}s
           </Badge>
-          <Button size="sm" variant="outline" onClick={() => action("/api/run_now", "Offload")}>
+          <Button size="sm" variant="outline" onClick={() => action(`/api/t/${slug}/run_now`, "Offload")}>
             <Play size={13} className="mr-1.5" /> Run Offload
           </Button>
-          <Button size="sm" variant="outline" onClick={() => action("/api/backup_now", "Backup")}>
+          <Button size="sm" variant="outline" onClick={() => action(`/api/t/${slug}/backup_now`, "Backup")}>
             <ArrowUpFromLine size={13} className="mr-1.5" /> Run Backup
           </Button>
         </div>

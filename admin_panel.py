@@ -1085,7 +1085,7 @@ def tenant_settings(slug):
                            'scheduler_timezone', 'ticket_backup_time']:
             if field_name in d:
                 setattr(cfg, field_name, d[field_name])
-        for int_field in ['continuous_offload_interval', 'attach_offload_interval_minutes',
+        for int_field in ['continuous_offload_interval', 'full_offload_interval', 'attach_offload_interval_minutes',
                           'ticket_backup_interval_minutes', 'ticket_backup_max_per_run',
                           'max_attachments_per_run', 'storage_report_interval']:
             if int_field in d:
@@ -1126,6 +1126,14 @@ def api_tenant_settings_json(slug):
         for secret in ('zendesk_api_token', 'wasabi_secret_key', 'telegram_bot_token'):
             if d.get(secret):
                 d[secret] = '••••••••'
+        # is_active lives on Tenant row in global.db, not on TenantConfig
+        from tenant_manager import get_global_db, Tenant as _Tenant
+        _gdb = get_global_db()
+        try:
+            _t = _gdb.query(_Tenant).filter_by(slug=slug).first()
+            d['is_active'] = bool(_t.is_active) if _t else True
+        finally:
+            _gdb.close()
         return jsonify(d)
 
     # POST — JSON body
@@ -1139,7 +1147,7 @@ def api_tenant_settings_json(slug):
                        'scheduler_timezone', 'ticket_backup_time', 'color']:
         if field_name in data and data[field_name] not in (None, '', '••••••••'):
             setattr(cfg, field_name, data[field_name])
-    for int_field in ['continuous_offload_interval', 'attach_offload_interval_minutes',
+    for int_field in ['continuous_offload_interval', 'full_offload_interval', 'attach_offload_interval_minutes',
                       'ticket_backup_interval_minutes', 'ticket_backup_max_per_run',
                       'max_attachments_per_run', 'storage_report_interval']:
         if int_field in data:
@@ -1155,6 +1163,34 @@ def api_tenant_settings_json(slug):
         if bool_field in data:
             setattr(cfg, bool_field, bool(data[bool_field]))
     save_tenant_config(cfg)
+    # Reschedule daily_offload job if full_offload_interval changed
+    if 'full_offload_interval' in data:
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger as _IT
+            from tenant_manager import list_tenants as _lt, get_tenant_config as _gtc2
+            _sched = init_scheduler()
+            if _sched.scheduler.running:
+                _all = _lt(active_only=True)
+                _intervals = [(_gtc2(t.slug).full_offload_interval or 5) for t in _all]
+                _new_interval = min(_intervals) if _intervals else 5
+                _sched.scheduler.reschedule_job(
+                    'daily_offload',
+                    trigger=_IT(minutes=_new_interval)
+                )
+                logger.info(f"Rescheduled daily_offload to every {_new_interval}m after tenant settings change")
+        except Exception as _re:
+            logger.warning(f"Could not reschedule daily_offload: {_re}")
+    # is_active lives on Tenant row in global.db — update it separately
+    if 'is_active' in data:
+        from tenant_manager import get_global_db, Tenant as _Tenant
+        _gdb = get_global_db()
+        try:
+            _t = _gdb.query(_Tenant).filter_by(slug=slug).first()
+            if _t:
+                _t.is_active = bool(data['is_active'])
+                _gdb.commit()
+        finally:
+            _gdb.close()
     return jsonify({'success': True})
 
 
@@ -1180,10 +1216,12 @@ def api_tenant_tickets_json(slug):
         sort_order = request.args.get('order', 'desc')
 
         sort_columns = {
-            'ticket_id': ProcessedTicket.ticket_id,
-            'processed_at': ProcessedTicket.processed_at,
+            'ticket_id':        ProcessedTicket.ticket_id,
+            'processed_at':     ProcessedTicket.processed_at,
             'attachments_count': ProcessedTicket.attachments_count,
-            'status': ProcessedTicket.status,
+            'status':           ProcessedTicket.status,
+            'error_message':    ProcessedTicket.error_message,
+            'bytes_offloaded':  ProcessedTicket.wasabi_files_size,
         }
         sort_col = sort_columns.get(sort_by, ProcessedTicket.processed_at)
         order_fn = desc if sort_order == 'desc' else asc
@@ -1205,17 +1243,41 @@ def api_tenant_tickets_json(slug):
         total = base_q.count()
         rows = base_q.order_by(order_fn(sort_col)).offset((page - 1) * per_page).limit(per_page).all()
 
+        # Enrich with ZendeskTicketCache (subject + ZD status) and storage snapshot data
+        ticket_ids = [t.ticket_id for t in rows]
+        snapshots = {}
+        cache_rows = {}
+        if ticket_ids:
+            for s in db.query(ZendeskStorageSnapshot).filter(
+                    ZendeskStorageSnapshot.ticket_id.in_(ticket_ids)).all():
+                snapshots[s.ticket_id] = s
+            for c in db.query(ZendeskTicketCache).filter(
+                    ZendeskTicketCache.ticket_id.in_(ticket_ids)).all():
+                cache_rows[c.ticket_id] = c
+
         tickets_out = []
         for t in rows:
+            snap  = snapshots.get(t.ticket_id)
+            cache = cache_rows.get(t.ticket_id)
+            # Prefer snapshot subject/status (more current from storage refresh);
+            # fall back to ticket cache which is populated by the offload scheduler.
+            subject  = (snap.subject   if snap  and snap.subject   else None) or \
+                       (cache.subject  if cache and cache.subject  else None)
+            zd_status = (snap.zd_status if snap  and snap.zd_status else None) or \
+                        (cache.status   if cache and cache.status   else None)
             tickets_out.append({
-                'ticket_id': t.ticket_id,
-                'status': t.status,
+                'ticket_id':        t.ticket_id,
+                'status':           t.status,
                 'attachments_count': t.attachments_count or 0,
-                'inlines_offloaded': getattr(t, 'inlines_offloaded', 0) or 0,
-                'bytes_offloaded': getattr(t, 'bytes_offloaded', 0) or 0,
-                'processed_at': t.processed_at.isoformat() if t.processed_at else None,
-                'error_message': t.error_message or None,
-                'ticket_url': f'https://{cfg.zendesk_subdomain}.zendesk.com/agent/tickets/{t.ticket_id}',
+                'inlines_offloaded': 0,
+                'bytes_offloaded':  t.wasabi_files_size or 0,
+                'processed_at':     t.processed_at.isoformat() if t.processed_at else None,
+                'error_message':    t.error_message or None,
+                'ticket_url':       f'https://{cfg.zendesk_subdomain}.zendesk.com/agent/tickets/{t.ticket_id}',
+                'subject':          subject,
+                'zd_status':        zd_status,
+                'snap_files':       ((snap.attach_count or 0) + (snap.inline_count or 0)) if snap and (snap.attach_count or snap.inline_count) else None,
+                'snap_size_bytes':  (snap.total_size or None) if snap else None,
             })
 
         # Status counts
@@ -1224,6 +1286,13 @@ def api_tenant_tickets_json(slug):
         for row in db.query(ProcessedTicket.status, sqlfunc.count(ProcessedTicket.id)).group_by(ProcessedTicket.status).all():
             status_counts[row[0] or ''] = row[1]
 
+        # Storage totals
+        snap_totals = db.query(
+            sqlfunc.count(ZendeskStorageSnapshot.id).label('count'),
+            sqlfunc.sum(ZendeskStorageSnapshot.total_size).label('total_bytes'),
+        ).filter(ZendeskStorageSnapshot.total_size > 0).one()
+        snap_last_updated = db.query(sqlfunc.max(ZendeskStorageSnapshot.updated_at)).scalar()
+
         return jsonify({
             'tickets': tickets_out,
             'total': total,
@@ -1231,6 +1300,11 @@ def api_tenant_tickets_json(slug):
             'per_page': per_page,
             'pages': max(1, (total + per_page - 1) // per_page),
             'status_counts': status_counts,
+            'storage_totals': {
+                'count': snap_totals.count or 0,
+                'total_bytes': int(snap_totals.total_bytes or 0),
+            },
+            'storage_last_updated': snap_last_updated.isoformat() if snap_last_updated else None,
         })
     finally:
         db.close()
@@ -1496,14 +1570,19 @@ def test_tenant_connection(slug, connection_type):
 
     if connection_type == 'zendesk':
         try:
-            client = ZendeskClient(
-                subdomain=cfg.zendesk_subdomain,
-                email=cfg.zendesk_email,
-                api_token=cfg.zendesk_api_token,
+            import requests as _rq
+            _url = f"https://{cfg.zendesk_subdomain}.zendesk.com/api/v2/tickets.json?per_page=1"
+            _resp = _rq.get(
+                _url,
+                auth=(f"{cfg.zendesk_email}/token", cfg.zendesk_api_token),
+                timeout=10,
             )
-            # Light check: just try listing a single page of tickets
-            client.get_all_tickets()
-            return jsonify({'success': True, 'message': f'Connected to {cfg.zendesk_subdomain}.zendesk.com ✓'})
+            if _resp.status_code == 200:
+                return jsonify({'success': True, 'message': f'Connected to {cfg.zendesk_subdomain}.zendesk.com ✓'})
+            elif _resp.status_code == 401:
+                return jsonify({'success': False, 'message': 'Authentication failed — check email and API token'})
+            else:
+                return jsonify({'success': False, 'message': f'Zendesk returned HTTP {_resp.status_code}'})
         except Exception as e:
             return jsonify({'success': False, 'message': f'Connection error: {e}'})
 
@@ -1581,20 +1660,53 @@ def test_tenant_connection(slug, connection_type):
 def tenant_backup_now(slug):
     """Manually trigger a ticket backup run for a specific tenant."""
     from tenant_manager import get_tenant_config
+    from database import set_current_tenant
     cfg = get_tenant_config(slug)
     if not cfg:
         return jsonify({'success': False, 'message': 'Tenant not found'}), 404
     try:
-        sched = init_scheduler()
         import threading
+        from ticket_backup_manager import TicketBackupManager
         def _run():
             try:
-                sched.run_backup_now()
+                set_current_tenant(cfg.slug)
+                tbm = TicketBackupManager(tenant_config=cfg)
+                tbm.backup_closed_tickets(limit=0)
             except Exception as exc:
-                logger.error(f'Manual backup for {slug} failed: {exc}', exc_info=True)
-        t = threading.Thread(target=_run, daemon=True, name=f'backup-manual-{slug}')
+                logger.error(f'Manual ticket backup for {slug} failed: {exc}', exc_info=True)
+            finally:
+                set_current_tenant(None)
+        t = threading.Thread(target=_run, daemon=True, name=f'ticket-backup-manual-{slug}')
         t.start()
-        return jsonify({'success': True, 'message': f'Backup job started for {cfg.display_name or slug}'})
+        return jsonify({'success': True, 'message': f'Ticket backup started for {cfg.display_name or slug}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/t/<slug>/run_now', methods=['POST'])
+@login_required
+def tenant_run_now(slug):
+    """Manually trigger attachment offload for a specific tenant."""
+    from tenant_manager import get_tenant_config
+    from database import set_current_tenant
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+    try:
+        import threading
+        from offloader import AttachmentOffloader
+        def _run():
+            try:
+                set_current_tenant(cfg.slug)
+                offloader = AttachmentOffloader(tenant_config=cfg)
+                offloader.run_offload()
+            except Exception as exc:
+                logger.error(f'Manual offload for {slug} failed: {exc}', exc_info=True)
+            finally:
+                set_current_tenant(None)
+        t = threading.Thread(target=_run, daemon=True, name=f'offload-manual-{slug}')
+        t.start()
+        return jsonify({'success': True, 'message': f'Offload started for {cfg.display_name or slug}'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
@@ -2308,6 +2420,169 @@ def tenant_storage_refresh(slug):
         return jsonify({'success': True, 'message': f'Storage snapshot refresh started for {cfg.display_name or slug}.'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUCKET SECURITY — IP Whitelist via S3 Bucket Policy
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _make_wasabi_client_for(cfg, which: str):
+    """Return (WasabiClient, bucket_name, label) for 'attach' or 'backup'."""
+    from wasabi_client import WasabiClient
+    if which == 'backup':
+        endpoint = cfg.ticket_backup_endpoint or cfg.wasabi_endpoint
+        return (
+            WasabiClient(
+                endpoint=endpoint,
+                access_key=cfg.wasabi_access_key,
+                secret_key=cfg.wasabi_secret_key,
+                bucket_name=cfg.ticket_backup_bucket,
+            ),
+            cfg.ticket_backup_bucket,
+            f'{endpoint}/{cfg.ticket_backup_bucket}' if endpoint else cfg.ticket_backup_bucket,
+        )
+    else:
+        return (
+            WasabiClient(
+                endpoint=cfg.wasabi_endpoint,
+                access_key=cfg.wasabi_access_key,
+                secret_key=cfg.wasabi_secret_key,
+                bucket_name=cfg.wasabi_bucket_name,
+            ),
+            cfg.wasabi_bucket_name,
+            f'{cfg.wasabi_endpoint}/{cfg.wasabi_bucket_name}',
+        )
+
+
+def _get_ip_whitelist(s3, bucket_name: str) -> list[str]:
+    import json
+    from botocore.exceptions import ClientError
+    try:
+        resp = s3.get_bucket_policy(Bucket=bucket_name)
+        policy = json.loads(resp['Policy'])
+    except ClientError as e:
+        if e.response['Error']['Code'] in ('NoSuchBucketPolicy', 'NoSuchBucket'):
+            return []
+        raise
+    for stmt in policy.get('Statement', []):
+        if stmt.get('Effect') == 'Deny' and 'NotIpAddress' in stmt.get('Condition', {}):
+            ips = stmt['Condition']['NotIpAddress'].get('aws:SourceIp', [])
+            return ips if isinstance(ips, list) else [ips]
+    return []
+
+
+def _set_ip_whitelist(s3, bucket_name: str, ips: list[str]):
+    import json
+    from botocore.exceptions import ClientError
+    try:
+        resp = s3.get_bucket_policy(Bucket=bucket_name)
+        policy = json.loads(resp['Policy'])
+    except ClientError as e:
+        if e.response['Error']['Code'] in ('NoSuchBucketPolicy', 'NoSuchBucket'):
+            policy = {'Version': '2012-10-17', 'Statement': []}
+        else:
+            raise
+    # Remove existing IP-deny statement
+    policy['Statement'] = [
+        s for s in policy.get('Statement', [])
+        if not (s.get('Effect') == 'Deny' and 'NotIpAddress' in s.get('Condition', {}))
+    ]
+    if ips:
+        policy['Statement'].append({
+            'Sid': 'DenyNonWhitelistedIPs',
+            'Effect': 'Deny',
+            'Principal': '*',
+            'Action': 's3:*',
+            'Resource': [f'arn:aws:s3:::{bucket_name}', f'arn:aws:s3:::{bucket_name}/*'],
+            'Condition': {'NotIpAddress': {'aws:SourceIp': ips}},
+        })
+    if not policy['Statement']:
+        try:
+            s3.delete_bucket_policy(Bucket=bucket_name)
+        except ClientError:
+            pass
+    else:
+        s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+
+
+@app.route('/api/t/<slug>/security/buckets')
+@login_required
+def tenant_security_buckets(slug):
+    """Return info + current IP whitelist for all buckets of a tenant."""
+    import json
+    from tenant_manager import get_tenant_config
+    from botocore.exceptions import ClientError
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    buckets = []
+    for which in ('attach', 'backup'):
+        try:
+            client, bucket_name, label = _make_wasabi_client_for(cfg, which)
+            if not bucket_name:
+                buckets.append({'which': which, 'bucket': '', 'endpoint': '', 'ips': [], 'error': 'Not configured'})
+                continue
+            ips = _get_ip_whitelist(client.s3_client, bucket_name)
+            endpoint = cfg.wasabi_endpoint if which == 'attach' else (cfg.ticket_backup_endpoint or cfg.wasabi_endpoint)
+            buckets.append({
+                'which': which,
+                'bucket': bucket_name,
+                'endpoint': endpoint,
+                'ips': ips,
+                'error': None,
+            })
+        except Exception as exc:
+            buckets.append({'which': which, 'bucket': '', 'endpoint': '', 'ips': [], 'error': str(exc)})
+
+    return jsonify({'buckets': buckets})
+
+
+@app.route('/api/t/<slug>/security/buckets/<which>', methods=['POST'])
+@login_required
+def tenant_security_set_whitelist(slug, which):
+    """Set IP whitelist for a bucket. Body: {ips: ['1.2.3.4/32', ...]}"""
+    import json, re
+    from tenant_manager import get_tenant_config
+    from botocore.exceptions import ClientError
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+    if which not in ('attach', 'backup'):
+        return jsonify({'success': False, 'message': 'Invalid bucket type'}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    raw_ips = body.get('ips', [])
+    if not isinstance(raw_ips, list):
+        return jsonify({'success': False, 'message': 'ips must be a list'}), 400
+
+    # Validate each entry is a valid IP or CIDR
+    cidr_re = re.compile(r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$')
+    ips = []
+    for entry in raw_ips:
+        entry = entry.strip()
+        if not entry:
+            continue
+        if not cidr_re.match(entry):
+            return jsonify({'success': False, 'message': f'Invalid IP/CIDR: {entry}'}), 400
+        ips.append(entry)
+
+    try:
+        client, bucket_name, _ = _make_wasabi_client_for(cfg, which)
+        if not bucket_name:
+            return jsonify({'success': False, 'message': 'Bucket not configured'}), 400
+        _set_ip_whitelist(client.s3_client, bucket_name, ips)
+        label = 'Offload' if which == 'attach' else 'Backup'
+        if ips:
+            msg = f'{label} bucket ({bucket_name}): whitelist updated to {len(ips)} IP(s)'
+        else:
+            msg = f'{label} bucket ({bucket_name}): IP whitelist removed (open access)'
+        logger.info(f'[Security] {slug} — {msg}')
+        return jsonify({'success': True, 'message': msg, 'ips': ips})
+    except ClientError as exc:
+        return jsonify({'success': False, 'message': f'Wasabi error: {exc}'}), 500
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
 
 
 # ── Closed-Ticket Backup ─────────────────────────────────────────────
@@ -3057,9 +3332,16 @@ def test_connection(connection_type):
             finally:
                 db.close()
             
-            client = ZendeskClient()
-            tickets = client.get_all_tickets()
-            return jsonify({'success': True, 'message': f'Connected! Found {len(tickets)} tickets'})
+            import requests as _rq
+            from config import ZENDESK_SUBDOMAIN, ZENDESK_EMAIL, ZENDESK_API_TOKEN
+            _url = f"https://{ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets.json?per_page=1"
+            _resp = _rq.get(_url, auth=(f"{ZENDESK_EMAIL}/token", ZENDESK_API_TOKEN), timeout=10)
+            if _resp.status_code == 200:
+                return jsonify({'success': True, 'message': f'Connected to {ZENDESK_SUBDOMAIN}.zendesk.com \u2713'})
+            elif _resp.status_code == 401:
+                return jsonify({'success': False, 'message': 'Authentication failed \u2014 check email and API token'})
+            else:
+                return jsonify({'success': False, 'message': f'Zendesk returned HTTP {_resp.status_code}'})
         except ValueError as e:
             return jsonify({'success': False, 'message': str(e)})
         except Exception as e:
@@ -3806,7 +4088,7 @@ def tools_ping():
     def generate():
         try:
             proc = subprocess.Popen(
-                ['ping', '-c', '10', '-W', '3', target],
+                ['/usr/bin/ping', '-c', '10', '-W', '3', target],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
@@ -3833,7 +4115,7 @@ def tools_traceroute():
     def generate():
         try:
             proc = subprocess.Popen(
-                ['traceroute', '-w', '3', '-m', '20', target],
+                ['/usr/sbin/traceroute', '-w', '3', '-m', '20', target],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
@@ -3863,7 +4145,7 @@ def tools_dns():
     def generate():
         try:
             proc = subprocess.Popen(
-                ['dig', '+noall', '+answer', '+stats', rtype, target],
+                ['/usr/bin/dig', '+noall', '+answer', '+stats', rtype, target],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )

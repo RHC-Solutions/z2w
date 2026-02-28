@@ -38,6 +38,7 @@ export default function BackupPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -55,8 +56,16 @@ export default function BackupPage() {
 
   async function handleRunNow() {
     setRunning(true);
-    try { await runTenantBackupNow(slug); } catch (_e) { /* ignore */ } finally { setRunning(false); }
-    setTimeout(() => load(), 3000);
+    setActionMsg(null);
+    try {
+      const res = await runTenantBackupNow(slug);
+      setActionMsg({ text: res.message || 'Backup started', ok: true });
+    } catch (e: unknown) {
+      setActionMsg({ text: e instanceof Error ? e.message : 'Failed to start backup', ok: false });
+    } finally {
+      setRunning(false);
+    }
+    setTimeout(() => { setActionMsg(null); load(); }, 4000);
   }
 
   if (loading) {
@@ -97,6 +106,13 @@ export default function BackupPage() {
           </Button>
         </div>
       </div>
+
+      {/* Action feedback */}
+      {actionMsg && (
+        <div className={`text-xs px-3 py-2 rounded border ${actionMsg.ok ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300' : 'bg-destructive/10 border-destructive/40 text-destructive'}`}>
+          {actionMsg.text}
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">

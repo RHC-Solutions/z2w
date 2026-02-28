@@ -156,6 +156,7 @@ class TenantConfig:
     alert_include_errors_detail: bool = True # include error detail lines in daily report
 
     # Scheduler / offload settings (per-tenant overrides)
+    full_offload_interval: int = 5
     continuous_offload_interval: int = 5
     scheduler_timezone: str = 'UTC'
     attach_offload_enabled: bool = True

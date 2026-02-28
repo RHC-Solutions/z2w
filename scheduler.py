@@ -422,18 +422,50 @@ class OffloadScheduler:
         try:
             self._continuous_running = True
             from config import CONTINUOUS_OFFLOAD_INTERVAL
+            from database import set_current_tenant
             # Look back 2× the interval to cover any clock drift or slow Zendesk indexing
             lookback = max(CONTINUOUS_OFFLOAD_INTERVAL * 2, 10)
-            stats = self.offloader.process_recent_tickets(since_minutes=lookback)
-            newly = stats.get("newly_processed", 0)
-            uploaded = stats.get("attachments_uploaded", 0)
-            size_mb = stats.get("total_size_bytes", 0) / 1024 / 1024
-            errors = stats.get("errors", [])
-            if newly > 0 or errors:
-                logger.info(
-                    f"[Continuous] tickets={stats['checked']} skipped={stats['already_done']} "
-                    f"new={newly} files={uploaded} size={size_mb:.1f}MB errors={len(errors)}"
-                )
+
+            try:
+                from tenant_manager import list_tenants, get_tenant_config as _gtc
+                tenants_list = list_tenants(active_only=True)
+            except Exception:
+                tenants_list = []
+
+            if tenants_list:
+                for _t in tenants_list:
+                    _cfg = _gtc(_t.slug)
+                    if not (_cfg and _cfg.is_configured and _cfg.attach_offload_enabled):
+                        continue
+                    try:
+                        _offloader = AttachmentOffloader(tenant_config=_cfg)
+                        stats = _offloader.process_recent_tickets(since_minutes=lookback)
+                        newly = stats.get("newly_processed", 0)
+                        uploaded = stats.get("attachments_uploaded", 0)
+                        size_mb = stats.get("total_size_bytes", 0) / 1024 / 1024
+                        errors = stats.get("errors", [])
+                        if newly > 0 or errors:
+                            logger.info(
+                                f"[Continuous][{_cfg.slug}] tickets={stats['checked']} "
+                                f"skipped={stats['already_done']} new={newly} "
+                                f"files={uploaded} size={size_mb:.1f}MB errors={len(errors)}"
+                            )
+                    except Exception as _te:
+                        logger.error(f"[Continuous][{_cfg.slug}] error: {_te}", exc_info=True)
+                    finally:
+                        set_current_tenant(None)
+            else:
+                # Fallback: no tenants in global.db — single-tenant legacy mode
+                stats = self.offloader.process_recent_tickets(since_minutes=lookback)
+                newly = stats.get("newly_processed", 0)
+                uploaded = stats.get("attachments_uploaded", 0)
+                size_mb = stats.get("total_size_bytes", 0) / 1024 / 1024
+                errors = stats.get("errors", [])
+                if newly > 0 or errors:
+                    logger.info(
+                        f"[Continuous] tickets={stats['checked']} skipped={stats['already_done']} "
+                        f"new={newly} files={uploaded} size={size_mb:.1f}MB errors={len(errors)}"
+                    )
         except Exception as e:
             logger.error(f"[Continuous offload] Unhandled exception: {e}", exc_info=True)
         finally:
@@ -460,8 +492,32 @@ class OffloadScheduler:
             start_time = datetime.utcnow()
             logger.info(f"Scheduled offload job started at {start_time}")
 
-            # Run offload
-            summary = self.offloader.run_offload()
+            # Run offload for every active tenant
+            from tenant_manager import list_tenants, get_tenant_config as _gtc
+            from database import set_current_tenant
+            try:
+                tenants_list = list_tenants(active_only=True)
+            except Exception:
+                tenants_list = []
+
+            if tenants_list:
+                for _t in tenants_list:
+                    _cfg = _gtc(_t.slug)
+                    if not (_cfg and _cfg.is_configured and _cfg.attach_offload_enabled):
+                        logger.info(f"[Tenant {_t.slug}] Skipping offload (not configured or disabled)")
+                        continue
+                    try:
+                        logger.info(f"[Tenant {_t.slug}] Starting offload")
+                        _offloader = AttachmentOffloader(tenant_config=_cfg)
+                        _offloader.run_offload()
+                        logger.info(f"[Tenant {_t.slug}] Offload complete")
+                    except Exception as _te:
+                        logger.error(f"[Tenant {_t.slug}] Offload error: {_te}", exc_info=True)
+                    finally:
+                        set_current_tenant(None)
+            else:
+                # No tenants in global.db — fall back to single-tenant legacy mode
+                self.offloader.run_offload()
 
             logger.info(f"Scheduled offload job completed at {datetime.utcnow()}")
 
@@ -798,16 +854,27 @@ The backup file is being sent to you now...
         from config import SCHEDULER_TIMEZONE, SCHEDULER_HOUR, SCHEDULER_MINUTE
         
         try:
-            # Schedule offload job — runs every 5 minutes, full offload with inline images
+            # Determine full-offload interval from tenant settings (minimum across active tenants)
+            _full_interval = 5  # default
+            try:
+                from tenant_manager import list_tenants as _lt_start, get_tenant_config as _gtc_start
+                _tenants_start = _lt_start(active_only=True)
+                if _tenants_start:
+                    _intervals_start = [(_gtc_start(t.slug).full_offload_interval or 5) for t in _tenants_start]
+                    _full_interval = max(1, min(_intervals_start))
+            except Exception:
+                pass
+
+            # Schedule offload job — runs every N minutes (configurable per tenant), full offload with inline images
             self.scheduler.add_job(
                 self.scheduled_job,
-                trigger=IntervalTrigger(minutes=5),
+                trigger=IntervalTrigger(minutes=_full_interval),
                 id='daily_offload',
-                name='Offload Every 5 Minutes',
+                name=f'Offload Every {_full_interval} Minutes',
                 replace_existing=True,
                 next_run_time=datetime.now()  # start immediately on boot
             )
-            logger.info("Scheduled offload job every 5 minutes")
+            logger.info(f"Scheduled offload job every {_full_interval} minutes")
             
             # Schedule log archiving job daily at 01:00 in configured timezone (after offload job)
             self.scheduler.add_job(
@@ -902,17 +969,37 @@ The backup file is being sent to you now...
             
             logger.info("Scheduler started successfully")
             print("Scheduler started successfully")
+            # Per-tenant startup alerts
             try:
-                from config import reload_config, SCHEDULER_TIMEZONE as TZ, RECHECK_HOUR, CONTINUOUS_OFFLOAD_INTERVAL
-                reload_config()
                 import socket
                 host = socket.gethostname()
-                self.telegram_reporter.send_message(
-                    f"▶️ <b>Scheduler started</b>\n🖥️ {host}\n"
-                    f"⚡ Continuous offload: every {CONTINUOUS_OFFLOAD_INTERVAL} min\n"
-                    f"🔄 Full offload: every 5 min\n"
-                    f"🔁 Daily recheck: {RECHECK_HOUR:02d}:00 {TZ}"
-                )
+                from config import RECHECK_HOUR, SCHEDULER_TIMEZONE as TZ
+                from tenant_manager import list_tenants as _lt, get_tenant_config as _gtc
+                from telegram_reporter import TelegramReporter as _TGR
+                from slack_reporter import SlackReporter as _SR
+                for _t in _lt(active_only=True):
+                    _cfg = _gtc(_t.slug)
+                    if not _cfg:
+                        continue
+                    _interval = _cfg.continuous_offload_interval or 5
+                    _msg = (
+                        f"▶️ <b>Scheduler started</b>\n"
+                        f"🏢 <b>{_cfg.display_name or _t.slug}</b>\n"
+                        f"🖥️ {host}\n"
+                        f"⚡ Continuous offload: every {_interval} min\n"
+                        f"🔄 Full offload: every 5 min\n"
+                        f"🔁 Daily recheck: {RECHECK_HOUR:02d}:00 {TZ}"
+                    )
+                    if _cfg.telegram_bot_token and _cfg.telegram_chat_id:
+                        try:
+                            _TGR(_cfg.telegram_bot_token, _cfg.telegram_chat_id).send_message(_msg)
+                        except Exception:
+                            pass
+                    if _cfg.slack_webhook_url:
+                        try:
+                            _SR(_cfg.slack_webhook_url).send_message(_msg.replace('<b>', '*').replace('</b>', '*').replace('<br>', '\n'))
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -924,7 +1011,24 @@ The backup file is being sent to you now...
     def stop(self):
         """Stop the scheduler"""
         try:
-            self.telegram_reporter.send_message("⏹ <b>Scheduler stopped</b>")
+            from tenant_manager import list_tenants as _lt, get_tenant_config as _gtc
+            from telegram_reporter import TelegramReporter as _TGR
+            from slack_reporter import SlackReporter as _SR
+            for _t in _lt(active_only=True):
+                _cfg = _gtc(_t.slug)
+                if not _cfg:
+                    continue
+                _msg = f"⏹ <b>Scheduler stopped</b>\n🏢 <b>{_cfg.display_name or _t.slug}</b>"
+                if _cfg.telegram_bot_token and _cfg.telegram_chat_id:
+                    try:
+                        _TGR(_cfg.telegram_bot_token, _cfg.telegram_chat_id).send_message(_msg)
+                    except Exception:
+                        pass
+                if _cfg.slack_webhook_url:
+                    try:
+                        _SR(_cfg.slack_webhook_url).send_message(f"⏹ *Scheduler stopped* — {_cfg.display_name or _t.slug}")
+                    except Exception:
+                        pass
         except Exception:
             pass
         self.scheduler.shutdown()
@@ -1042,9 +1146,40 @@ The backup file is being sent to you now...
             logger.info("[TicketBackup] Starting closed-ticket backup job")
 
             from config import TICKET_BACKUP_DAILY_LIMIT
+            from database import set_current_tenant
             limit = TICKET_BACKUP_DAILY_LIMIT or 0
 
-            stats = self.ticket_backup_manager.backup_closed_tickets(limit=limit)
+            try:
+                from tenant_manager import list_tenants, get_tenant_config as _gtc
+                tenants_list = list_tenants(active_only=True)
+            except Exception:
+                tenants_list = []
+
+            if tenants_list:
+                combined = {'tickets_scanned': 0, 'tickets_backed_up': 0,
+                            'files_uploaded': 0, 'bytes_uploaded': 0, 'errors': []}
+                for _t in tenants_list:
+                    _cfg = _gtc(_t.slug)
+                    if not (_cfg and _cfg.ticket_backup_enabled and _cfg.ticket_backup_bucket):
+                        logger.info(f"[TicketBackup][{_t.slug}] Skipping (disabled or not configured)")
+                        continue
+                    try:
+                        logger.info(f"[TicketBackup][{_t.slug}] Starting")
+                        from ticket_backup_manager import TicketBackupManager
+                        _tbm = TicketBackupManager(tenant_config=_cfg)
+                        _stats = _tbm.backup_closed_tickets(limit=limit)
+                        for k in ('tickets_scanned', 'tickets_backed_up', 'files_uploaded', 'bytes_uploaded'):
+                            combined[k] += _stats.get(k, 0)
+                        combined['errors'].extend(_stats.get('errors', []))
+                        logger.info(f"[TicketBackup][{_t.slug}] Done — backed_up={_stats.get('tickets_backed_up', 0)}")
+                    except Exception as _te:
+                        logger.error(f"[TicketBackup][{_t.slug}] Error: {_te}", exc_info=True)
+                    finally:
+                        set_current_tenant(None)
+                stats = combined
+            else:
+                stats = self.ticket_backup_manager.backup_closed_tickets(limit=limit)
+
             self._ticket_backup_last_summary = stats
 
             # ── Build summary message ──────────────────────────

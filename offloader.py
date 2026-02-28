@@ -16,27 +16,47 @@ logger = logging.getLogger('zendesk_offloader')
 class AttachmentOffloader:
     """Main class for offloading attachments from Zendesk to Wasabi"""
     
-    def __init__(self):
-        # Reload config to get latest settings from .env
-        from config import reload_config
-        reload_config()
-        
-        # Also check database for settings and update environment
-        db = get_db()
-        try:
-            from database import Setting
-            settings_list = db.query(Setting).all()
-            import os
-            for setting in settings_list:
-                # Update environment variables with database values
-                os.environ[setting.key] = setting.value or ""
-            # Reload config again to pick up database settings
+    def __init__(self, tenant_config=None):
+        if tenant_config is not None:
+            # Per-tenant mode: credentials come directly from TenantConfig.
+            # Set thread-local so all get_db() calls in this thread use the
+            # right per-tenant tickets.db.
+            from database import set_current_tenant
+            set_current_tenant(tenant_config.slug)
+
+            endpoint = tenant_config.wasabi_endpoint or ''
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f'https://{endpoint}'
+
+            self.zendesk = ZendeskClient(
+                subdomain=tenant_config.zendesk_subdomain,
+                email=tenant_config.zendesk_email,
+                api_token=tenant_config.zendesk_api_token,
+            )
+            self.wasabi = WasabiClient(
+                endpoint=endpoint,
+                access_key=tenant_config.wasabi_access_key,
+                secret_key=tenant_config.wasabi_secret_key,
+                bucket_name=tenant_config.wasabi_bucket_name,
+            )
+        else:
+            # Legacy / single-tenant mode: read from .env + root settings DB.
+            from config import reload_config
             reload_config()
-        finally:
-            db.close()
-        
-        self.zendesk = ZendeskClient()
-        self.wasabi = WasabiClient()
+
+            db = get_db()
+            try:
+                from database import Setting
+                settings_list = db.query(Setting).all()
+                import os
+                for setting in settings_list:
+                    os.environ[setting.key] = setting.value or ""
+                reload_config()
+            finally:
+                db.close()
+
+            self.zendesk = ZendeskClient()
+            self.wasabi = WasabiClient()
     
     def get_processed_ticket_ids(self) -> set:
         """Get set of successfully processed ticket IDs.

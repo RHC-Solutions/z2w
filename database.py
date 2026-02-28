@@ -1,12 +1,23 @@
 """
 Database models and setup
 """
+import threading
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from config import DATABASE_PATH
+
+# Thread-local storage used by the scheduler to route get_db() to the right
+# per-tenant DB without touching Flask's request context.
+_thread_local = threading.local()
+
+
+def set_current_tenant(slug):
+    """Set the active tenant slug for the current thread.
+    Pass None to clear (use root DB)."""
+    _thread_local.slug = slug
 
 Base = declarative_base()
 
@@ -213,11 +224,15 @@ def get_db(slug: str = None):
     Get a database session.
 
     If *slug* is given (or a tenant slug is stored on the current Flask request
-    via Flask's 'g' object), returns a session for that tenant's tickets.db.
+    via Flask's 'g' object, or set via set_current_tenant()), returns a session
+    for that tenant's tickets.db.
     Falls back to the legacy tickets.db for backward-compat during transition.
     """
     if slug is None:
-        # Try to pull the current tenant from Flask request context
+        # 1. Thread-local (scheduler / background jobs)
+        slug = getattr(_thread_local, 'slug', None)
+    if slug is None:
+        # 2. Flask request context
         try:
             from flask import g as _g
             slug = getattr(_g, 'tenant_slug', None)

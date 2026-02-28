@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
   Users, LayoutDashboard, FileText, Settings, Wrench,
-  ChevronDown, ChevronUp, LogOut, Database, Ticket, HardDrive,
-  Archive, PlusCircle,
+  ChevronDown, ChevronUp, LogOut, Database, Ticket,
+  Archive, PlusCircle, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -89,7 +89,7 @@ export function Sidebar() {
                 <NavItem href={`/t/${t.slug}/dashboard`} icon={<LayoutDashboard size={14} />} label="Dashboard" active={isActive(`/t/${t.slug}/dashboard`)} small />
                 <NavItem href={`/t/${t.slug}/tickets`} icon={<Ticket size={14} />} label="Tickets" active={isActive(`/t/${t.slug}/tickets`)} small />
                 <NavItem href={`/t/${t.slug}/backup`} icon={<Archive size={14} />} label="Backup" active={isActive(`/t/${t.slug}/backup`)} small />
-                <NavItem href={`/t/${t.slug}/storage`} icon={<HardDrive size={14} />} label="Storage" active={isActive(`/t/${t.slug}/storage`)} small />
+                <NavItem href={`/t/${t.slug}/security`} icon={<ShieldCheck size={14} />} label="Security" active={isActive(`/t/${t.slug}/security`)} small />
                 <NavItem href={`/t/${t.slug}/logs`} icon={<FileText size={14} />} label="Logs" active={isActive(`/t/${t.slug}/logs`)} small />
                 <NavItem href={`/t/${t.slug}/settings`} icon={<Settings size={14} />} label="Settings" active={isActive(`/t/${t.slug}/settings`)} small />
               </div>

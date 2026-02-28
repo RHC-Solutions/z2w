@@ -69,6 +69,33 @@ function TestButton({ slug, type }: { slug: string; type: string }) {
 
 type DraftSettings = Omit<TenantSettings, "slug">;
 
+/** Replace every null/undefined field with a safe default so controlled inputs never crash. */
+function normalizeSettings(s: TenantSettings): DraftSettings {
+  const { slug: _slug, ...rest } = s;
+  const strings: Array<keyof typeof rest> = [
+    "display_name","color","zendesk_subdomain","zendesk_email","zendesk_api_token",
+    "wasabi_endpoint","wasabi_access_key","wasabi_secret_key","wasabi_bucket_name",
+    "ticket_backup_endpoint","ticket_backup_bucket",
+    "telegram_bot_token","telegram_chat_id","slack_webhook_url",
+    "scheduler_timezone","ticket_backup_time",
+  ];
+  const numbers: Array<keyof typeof rest> = [
+    "full_offload_interval","continuous_offload_interval","ticket_backup_max_per_run",
+    "max_attachments_per_run","storage_report_interval",
+  ];
+  const booleans: Array<keyof typeof rest> = [
+    "is_active","attach_offload_enabled","ticket_backup_enabled",
+    "alert_on_offload_error","alert_on_backup_error","alert_daily_report",
+    "alert_daily_telegram","alert_daily_slack",
+    "alert_include_offload_stats","alert_include_backup_stats","alert_include_errors_detail",
+  ];
+  const out = { ...rest } as Record<string, unknown>;
+  for (const k of strings) if (out[k as string] == null) out[k as string] = "";
+  for (const k of numbers) if (out[k as string] == null) out[k as string] = 0;
+  for (const k of booleans) if (out[k as string] == null) out[k as string] = false;
+  return out as DraftSettings;
+}
+
 function FieldRow({
   label,
   hint,
@@ -98,13 +125,13 @@ function SwitchRow({
   indent,
 }: {
   label: string;
-  checked: boolean;
+  checked: boolean | null | undefined;
   onCheckedChange: (v: boolean) => void;
   indent?: boolean;
 }) {
   return (
     <div className={`flex items-center gap-2 text-sm ${indent ? "ml-5" : ""}`}>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch checked={checked ?? false} onCheckedChange={onCheckedChange} />
       <span className="text-muted-foreground">{label}</span>
     </div>
   );
@@ -121,10 +148,7 @@ export default function SettingsPage() {
   useEffect(() => {
     setLoading(true);
     getTenantSettings(slug)
-      .then((s) => {
-        const { slug: _slug, ...rest } = s;
-        setSettings(rest);
-      })
+      .then((s) => setSettings(normalizeSettings(s)))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [slug]);
@@ -361,7 +385,10 @@ export default function SettingsPage() {
           <FieldRow label="Timezone">
             <Input value={settings.scheduler_timezone} onChange={(e) => set("scheduler_timezone", e.target.value)} placeholder="UTC" />
           </FieldRow>
-          <FieldRow label="Offload Interval (min)">
+          <FieldRow label="Full Offload Interval (min)" hint="How often the full offload job runs (affects all tenants; takes effect immediately)">
+            <Input type="number" min={1} value={settings.full_offload_interval ?? 5} onChange={(e) => set("full_offload_interval", Number(e.target.value))} />
+          </FieldRow>
+          <FieldRow label="Continuous Offload Interval (min)">
             <Input type="number" value={settings.continuous_offload_interval} onChange={(e) => set("continuous_offload_interval", Number(e.target.value))} />
           </FieldRow>
           <FieldRow label="Backup Time (HH:MM)">
@@ -465,10 +492,16 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center gap-2">
             <Switch
-              checked={settings.is_active}
+              checked={settings.is_active ?? false}
               onCheckedChange={(v) => {
                 set("is_active", v);
-                fetch(`/api/tenants/${slug}/toggle`, { method: "POST", credentials: "include" });
+                // Save immediately with explicit value (never use blind toggle)
+                fetch(`/api/t/${slug}/settings`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify({ is_active: v }),
+                });
               }}
             />
             <Badge variant={settings.is_active ? "default" : "secondary"}>
