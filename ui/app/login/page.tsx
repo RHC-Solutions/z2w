@@ -20,23 +20,26 @@ export default function LoginPage() {
     setLoading(true);
     const fd = new FormData(e.currentTarget);
     try {
-      const res = await fetch("/login", {
+      const res = await fetch("/api/login", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           username: fd.get("username") as string,
           password: fd.get("password") as string,
         }),
       });
-      if (res.redirected || res.ok) {
-        router.push("/tenants");
+      const data = await res.json();
+      if (data.ok) {
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get("next") || "/tenants";
+        router.push(next);
         router.refresh();
       } else {
-        setError("Invalid credentials");
+        setError(data.error || "Invalid credentials");
       }
     } catch {
-      setError("Connection error");
+      setError("Connection error — please try again");
     } finally {
       setLoading(false);
     }
@@ -77,11 +80,17 @@ export default function LoginPage() {
                 Sign in
               </Button>
               <div className="relative my-2">
-                <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
-                <div className="relative flex justify-center text-xs uppercase text-muted-foreground"><span className="bg-card px-2">or</span></div>
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-border" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase text-muted-foreground">
+                  <span className="bg-card px-2">or</span>
+                </div>
               </div>
               <a href="/login/oauth">
-                <Button type="button" variant="outline" className="w-full">Continue with Microsoft</Button>
+                <Button type="button" variant="outline" className="w-full">
+                  Continue with Microsoft
+                </Button>
               </a>
             </form>
           </CardContent>

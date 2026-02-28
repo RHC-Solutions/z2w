@@ -460,6 +460,64 @@ def logout():
     return redirect(url_for('login'))
 
 
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    """JSON login endpoint for Next.js frontend."""
+    # If already logged in
+    if session.get('logged_in') or session.get('user_email'):
+        return jsonify({'ok': True})
+
+    # Accept both JSON and form data
+    if request.is_json:
+        data = request.get_json() or {}
+        username = (data.get('username') or '').strip()
+        password = data.get('password') or ''
+    else:
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+
+    # Get credentials from DB, fall back to config
+    db = get_db()
+    expected_username = ADMIN_USERNAME
+    expected_password = ADMIN_PASSWORD
+    password_from_db = False
+    try:
+        admin_username_setting = db.query(Setting).filter_by(key='ADMIN_USERNAME').first()
+        admin_password_setting = db.query(Setting).filter_by(key='ADMIN_PASSWORD').first()
+        if admin_username_setting and admin_username_setting.value:
+            expected_username = admin_username_setting.value.strip()
+        elif ADMIN_USERNAME:
+            expected_username = ADMIN_USERNAME.strip()
+        if admin_password_setting and admin_password_setting.value:
+            expected_password = admin_password_setting.value  # preserve exact value
+            password_from_db = True
+        elif ADMIN_PASSWORD:
+            expected_password = ADMIN_PASSWORD
+    except Exception as e:
+        logger.error(f'api_login: credential fetch error: {e}')
+    finally:
+        db.close()
+
+    if username == expected_username and password == expected_password:
+        session['logged_in'] = True
+        session['username'] = username
+        session['must_change_password'] = not password_from_db
+        resp = jsonify({'ok': True, 'must_change_password': not password_from_db})
+        return resp
+
+    logger.warning(f'api_login: failed attempt for username="{username}"')
+    return jsonify({'ok': False, 'error': 'Invalid credentials'}), 401
+
+
+@app.route('/api/logout', methods=['POST', 'GET'])
+def api_logout():
+    """JSON logout endpoint for Next.js frontend."""
+    if session.get('token_cache'):
+        session.pop('token_cache')
+    session.clear()
+    return jsonify({'ok': True})
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LEGACY → NEW UI REDIRECTS
 # Redirect old Flask page routes to the new Next.js UI at /ui/...
@@ -1780,10 +1838,10 @@ def api_bucket_presign(slug):
 
 
 @app.route('/')
-@login_required
 def index():
-    """Root → proxy to Next.js UI."""
-    return nextjs_proxy('')
+    """Root → redirect to Next.js UI on port 3000."""
+    host = request.host.split(':')[0]
+    return redirect(f'http://{host}:3000/', 302)
 
 
 def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
@@ -3966,59 +4024,16 @@ def tools_speedtest():
 
     return Response(stream_with_context(generate()), mimetype='text/plain')
 
-# ─── Next.js UI proxy ─────────────────────────────────────────────────────────
+# ─── Next.js UI redirect ─────────────────────────────────────────────────────
+# Legacy /ui/* bookmarks redirect to the Next.js server on port 3000.
 
 @app.route('/ui', defaults={'_legacy_path': ''})
 @app.route('/ui/<path:_legacy_path>')
 def nextjs_legacy_redirect(_legacy_path):
-    """Redirect old /ui/* bookmarks to /."""
-    return redirect('/' + _legacy_path if _legacy_path else '/', 301)
-
-
-@app.route('/_next/<path:path>')
-@app.route('/_next')
-def nextjs_static(path=''):
-    """Proxy Next.js built static assets."""
-    return nextjs_proxy('_next/' + path if path else '_next')
-
-
-@app.route('/<path:path>', endpoint='nextjs_catchall')
-@login_required
-def nextjs_catchall(path):
-    """Catch-all: proxy any non-Flask route to the Next.js standalone server."""
-    return nextjs_proxy(path)
-
-
-def nextjs_proxy(path):
-    """Proxy requests to the Next.js standalone server on port 3000."""
-    from flask import Response as _Response
-    ui_host = os.environ.get('NEXTJS_URL', 'http://127.0.0.1:3000')
-    target = f'{ui_host}/{path}' if path else f'{ui_host}/'
-    if request.query_string:
-        target += '?' + request.query_string.decode('utf-8', errors='replace')
-    try:
-        excluded_req = {'host', 'content-length', 'transfer-encoding'}
-        fwd_headers = {k: v for k, v in request.headers if k.lower() not in excluded_req}
-        # Ask Next.js not to gzip so we can stream plainly
-        fwd_headers['Accept-Encoding'] = 'identity'
-        resp = requests.request(
-            method=request.method,
-            url=target,
-            headers=fwd_headers,
-            data=request.get_data(),
-            cookies=request.cookies,
-            allow_redirects=False,
-            timeout=30,
-        )
-        excluded_resp = {'content-encoding', 'content-length', 'transfer-encoding', 'connection'}
-        headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_resp]
-        return _Response(resp.content, status=resp.status_code, headers=headers)
-    except requests.exceptions.ConnectionError:
-        return _Response('Next.js UI server is not running. Start z2w-ui service.', status=503,
-                         mimetype='text/plain')
-    except Exception as exc:
-        logger.error(f'Next.js proxy error: {exc}')
-        return _Response(f'Proxy error: {exc}', status=502, mimetype='text/plain')
+    """Redirect old /ui/* bookmarks to Next.js on port 3000."""
+    host = request.host.split(':')[0]
+    dest = f'http://{host}:3000/{_legacy_path}' if _legacy_path else f'http://{host}:3000/'
+    return redirect(dest, 301)
 
 
 if __name__ == '__main__':
