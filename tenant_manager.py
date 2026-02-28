@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Boolean, DateTime, Text, event as sa_event
+    create_engine, Column, Integer, String, Boolean, DateTime, Text, event as sa_event,
+    text as sa_text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -48,6 +49,7 @@ class Tenant(GlobalBase):
     id          = Column(Integer, primary_key=True)
     slug        = Column(String(100), unique=True, nullable=False, index=True)  # = zendesk subdomain
     display_name = Column(String(200), nullable=True)
+    color       = Column(String(20), nullable=True)   # e.g. '#14b8a6'
     is_active   = Column(Boolean, default=True, nullable=False)
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -92,6 +94,13 @@ def _get_global_engine():
             cur.close()
 
         GlobalBase.metadata.create_all(_global_engine)
+        # Additive migration: add color column if not present
+        try:
+            with _global_engine.connect() as _c:
+                _c.execute(sa_text('ALTER TABLE tenants ADD COLUMN color VARCHAR(20)'))
+                _c.commit()
+        except Exception:
+            pass  # column already exists
         _GlobalSession = sessionmaker(bind=_global_engine)
     return _global_engine
 
@@ -111,6 +120,7 @@ class TenantConfig:
 
     slug: str = ''
     display_name: str = ''
+    color: str = ''   # hex color for UI, e.g. '#14b8a6'
 
     # Zendesk
     zendesk_subdomain: str = ''
@@ -208,6 +218,7 @@ def get_tenant_config(slug: str) -> Optional[TenantConfig]:
         cfg = TenantConfig(
             slug=tenant.slug,
             display_name=tenant.display_name or tenant.slug,
+            color=tenant.color or '',
         )
         for key in _SETTING_KEYS:
             raw = settings.get(key)
@@ -246,6 +257,8 @@ def save_tenant_config(cfg: TenantConfig, create_if_missing: bool = True) -> boo
             _ensure_tenant_dirs(cfg.slug)
 
         tenant.display_name = cfg.display_name or tenant.display_name
+        if cfg.color is not None:
+            tenant.color = cfg.color
         tenant.updated_at = datetime.utcnow()
         db.commit()
 

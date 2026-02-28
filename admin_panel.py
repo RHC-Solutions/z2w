@@ -461,10 +461,36 @@ def logout():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GLOBAL TENANTS OVERVIEW  —  /tenants
+# LEGACY → NEW UI REDIRECTS
+# Redirect old Flask page routes to the new Next.js UI at /ui/...
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.route('/tenants')
+@login_required
+def tenants_overview_redirect():
+    return redirect('/tenants', 302)
+
+@app.route('/wizard')
+@login_required
+def wizard_redirect():
+    return redirect('/wizard', 302)
+
+@app.route('/tools')
+@login_required
+def tools_redirect():
+    return redirect('/tools', 302)
+
+@app.route('/index')
+@login_required
+def index_redirect():
+    return redirect('/', 302)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GLOBAL TENANTS OVERVIEW  —  /tenants (legacy Jinja2, kept for API)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/tenants_legacy')
 @login_required
 def tenants_overview():
     """Global tenant management page."""
@@ -615,7 +641,7 @@ def api_tenants_list():
     from tenant_manager import list_tenants
     tenants = list_tenants()
     return jsonify({'tenants': [
-        {'slug': t.slug, 'display_name': t.display_name or t.slug, 'is_active': t.is_active}
+        {'slug': t.slug, 'display_name': t.display_name or t.slug, 'is_active': t.is_active, 'color': t.color or ''}
         for t in tenants
     ]})
 
@@ -718,7 +744,7 @@ def api_tenants_overview():
 # ADD-TENANT WIZARD  —  /wizard
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route('/wizard')
+@app.route('/wizard_legacy')
 @login_required
 def wizard():
     """New tenant setup wizard."""
@@ -940,36 +966,24 @@ def wizard_save():
                     'message': f'Tenant "{slug}" created successfully'})
 
 
-# ── Per-tenant route aliases (/t/{slug}/... → existing view functions) ────────
+# ── Per-tenant route aliases (/t/{slug}/... → new Next.js UI) ────────────────
 
 @app.route('/t/<slug>/tickets')
 @login_required
 def tenant_tickets(slug):
-    from flask import g
-    g.tenant_slug = slug
-    from tenant_manager import get_tenant_config
-    g.tenant_cfg = get_tenant_config(slug)
-    return tickets()
+    return redirect(f'/ui/t/{slug}/tickets', 302)
 
 
 @app.route('/t/<slug>/ticket_backup')
 @login_required
 def tenant_ticket_backup(slug):
-    from flask import g
-    g.tenant_slug = slug
-    from tenant_manager import get_tenant_config
-    g.tenant_cfg = get_tenant_config(slug)
-    return ticket_backup()
+    return redirect(f'/ui/t/{slug}/backup', 302)
 
 
 @app.route('/t/<slug>/storage')
 @login_required
 def tenant_storage(slug):
-    from flask import g
-    g.tenant_slug = slug
-    from tenant_manager import get_tenant_config
-    g.tenant_cfg = get_tenant_config(slug)
-    return storage_report()
+    return redirect(f'/ui/t/{slug}/storage', 302)
 
 
 @app.route('/t/<slug>/explorer')
@@ -985,17 +999,15 @@ def tenant_explorer(slug):
 @app.route('/t/<slug>/logs')
 @login_required
 def tenant_logs(slug):
-    from flask import g
-    g.tenant_slug = slug
-    from tenant_manager import get_tenant_config
-    g.tenant_cfg = get_tenant_config(slug)
-    return logs()
+    return redirect(f'/ui/t/{slug}/logs', 302)
 
 
 @app.route('/t/<slug>/settings', methods=['GET', 'POST'])
 @login_required
 def tenant_settings(slug):
-    """Per-tenant settings — read/write via global.db TenantSetting."""
+    return redirect(f'/ui/t/{slug}/settings', 302)
+
+
     from flask import g
     from tenant_manager import get_tenant_config, save_tenant_config, TenantConfig
     cfg = get_tenant_config(slug)
@@ -1066,7 +1078,7 @@ def api_tenant_settings_json(slug):
                        'ticket_backup_endpoint', 'ticket_backup_bucket',
                        'telegram_bot_token', 'telegram_chat_id',
                        'slack_webhook_url', 'slack_bot_token',
-                       'scheduler_timezone', 'ticket_backup_time']:
+                       'scheduler_timezone', 'ticket_backup_time', 'color']:
         if field_name in data and data[field_name] not in (None, '', '••••••••'):
             setattr(cfg, field_name, data[field_name])
     for int_field in ['continuous_offload_interval', 'attach_offload_interval_minutes',
@@ -1141,8 +1153,8 @@ def api_tenant_tickets_json(slug):
                 'ticket_id': t.ticket_id,
                 'status': t.status,
                 'attachments_count': t.attachments_count or 0,
-                'inlines_offloaded': t.inlines_offloaded or 0,
-                'bytes_offloaded': t.bytes_offloaded or 0,
+                'inlines_offloaded': getattr(t, 'inlines_offloaded', 0) or 0,
+                'bytes_offloaded': getattr(t, 'bytes_offloaded', 0) or 0,
                 'processed_at': t.processed_at.isoformat() if t.processed_at else None,
                 'error_message': t.error_message or None,
                 'ticket_url': f'https://{cfg.zendesk_subdomain}.zendesk.com/agent/tickets/{t.ticket_id}',
@@ -1199,7 +1211,17 @@ def api_tenant_logs_json(slug):
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 200, type=int)
 
-    log_file = logs_dir / 'app.log' if selected_date == today_str else logs_dir / f'app.log.{selected_date}'
+    # Try per-tenant log directory first (logs/{slug}/app.log.*), fall back to global
+    tenant_log_dir = logs_dir / slug
+    tenant_log_file = None
+    if tenant_log_dir.is_dir():
+        tf = tenant_log_dir / 'app.log' if selected_date == today_str else tenant_log_dir / f'app.log.{selected_date}'
+        if tf.exists():
+            tenant_log_file = tf
+    log_file = tenant_log_file if tenant_log_file else (
+        logs_dir / 'app.log' if selected_date == today_str else logs_dir / f'app.log.{selected_date}'
+    )
+    use_slug_filter = tenant_log_file is None  # filter global log by slug
     raw_lines = []
     if log_file.exists():
         try:
@@ -1227,6 +1249,11 @@ def api_tenant_logs_json(slug):
         entries.append(current)
     entries.reverse()
 
+    # Per-tenant filter: keep entries mentioning this slug when using the global log
+    if use_slug_filter and slug:
+        slug_lower = slug.lower()
+        entries = [e for e in entries if slug_lower in e['msg'].lower()
+                   or any(slug_lower in x.lower() for x in e.get('extra', []))]
     if level_filter:
         entries = [e for e in entries if e['level'] == level_filter]
     if search_q:
@@ -1277,7 +1304,7 @@ def api_tenant_backup_json(slug):
             'bytes_uploaded': r.bytes_uploaded or 0,
             'errors_count': r.errors_count or 0,
             'status': r.status or 'unknown',
-            'error_message': r.error_message or None,
+            'error_message': getattr(r, 'error_message', None),
         } for r in runs]
 
         # Aggregate totals
@@ -1335,6 +1362,7 @@ def api_tenant_storage_json(slug):
             'files': ZendeskStorageSnapshot.attach_count,
             'subject': ZendeskStorageSnapshot.subject,
             'status': ZendeskStorageSnapshot.zd_status,
+            'updated_at': ZendeskStorageSnapshot.updated_at,
         }
         sort_col = sort_map.get(sort_by, ZendeskStorageSnapshot.total_size)
         order_fn = desc if sort_order == 'desc' else asc
@@ -1393,6 +1421,124 @@ def api_tenant_storage_json(slug):
         })
     finally:
         db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PER-TENANT ACTIONS: test connection, run backup now
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/test_connection/<connection_type>', methods=['POST'])
+@login_required
+def test_tenant_connection(slug, connection_type):
+    """Test a specific connection for a tenant using their stored settings."""
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+
+    if connection_type == 'zendesk':
+        try:
+            client = ZendeskClient(
+                subdomain=cfg.zendesk_subdomain,
+                email=cfg.zendesk_email,
+                api_token=cfg.zendesk_api_token,
+            )
+            # Light check: just try listing a single page of tickets
+            client.get_all_tickets()
+            return jsonify({'success': True, 'message': f'Connected to {cfg.zendesk_subdomain}.zendesk.com ✓'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Connection error: {e}'})
+
+    elif connection_type == 'wasabi':
+        try:
+            endpoint = cfg.wasabi_endpoint or ''
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f'https://{endpoint}'
+            client = WasabiClient(
+                endpoint=endpoint,
+                access_key=cfg.wasabi_access_key,
+                secret_key=cfg.wasabi_secret_key,
+                bucket_name=cfg.wasabi_bucket_name,
+            )
+            success, message = client.test_connection()
+            return jsonify({'success': success, 'message': message})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Connection error: {e}'})
+
+    elif connection_type == 'wasabi_backup':
+        try:
+            endpoint = cfg.ticket_backup_endpoint or ''
+            if endpoint and not endpoint.startswith('http'):
+                endpoint = f'https://{endpoint}'
+            client = WasabiClient(
+                endpoint=endpoint,
+                access_key=cfg.wasabi_access_key,
+                secret_key=cfg.wasabi_secret_key,
+                bucket_name=cfg.ticket_backup_bucket,
+            )
+            success, message = client.test_connection()
+            return jsonify({'success': success, 'message': message})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Connection error: {e}'})
+
+    elif connection_type == 'telegram':
+        try:
+            from telegram_reporter import TelegramReporter
+            reporter = TelegramReporter(
+                bot_token=cfg.telegram_bot_token,
+                chat_id=cfg.telegram_chat_id,
+            )
+            if not reporter.bot_token or not reporter.chat_id:
+                return jsonify({'success': False, 'message': 'Bot token or chat ID not configured'})
+            sent = reporter.send_message(
+                f'✅ <b>Test from z2w — {cfg.display_name or slug}</b>\nConnection successful!'
+            )
+            return jsonify({'success': sent, 'message': 'Message sent!' if sent else 'Failed to send message'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Telegram error: {e}'})
+
+    elif connection_type == 'slack':
+        try:
+            from slack_reporter import SlackReporter
+            import requests as _req
+            reporter = SlackReporter(webhook_url=cfg.slack_webhook_url)
+            if not reporter.webhook_url:
+                return jsonify({'success': False, 'message': 'Webhook URL not configured'})
+            resp = _req.post(
+                reporter.webhook_url,
+                json={'text': f'✅ Test from z2w — {cfg.display_name or slug} — connection successful!'},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return jsonify({'success': True, 'message': 'Message sent to Slack!'})
+            return jsonify({'success': False, 'message': f'Slack returned {resp.status_code}: {resp.text[:200]}'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'Slack error: {e}'})
+
+    return jsonify({'success': False, 'message': f'Unknown connection type: {connection_type}'}), 400
+
+
+@app.route('/api/t/<slug>/backup_now', methods=['POST'])
+@login_required
+def tenant_backup_now(slug):
+    """Manually trigger a ticket backup run for a specific tenant."""
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+    try:
+        sched = init_scheduler()
+        import threading
+        def _run():
+            try:
+                sched.run_backup_now()
+            except Exception as exc:
+                logger.error(f'Manual backup for {slug} failed: {exc}', exc_info=True)
+        t = threading.Thread(target=_run, daemon=True, name=f'backup-manual-{slug}')
+        t.start()
+        return jsonify({'success': True, 'message': f'Backup job started for {cfg.display_name or slug}'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1634,22 +1780,10 @@ def api_bucket_presign(slug):
 
 
 @app.route('/')
-@app.route('/dashboard')
 @login_required
 def index():
-    from flask import g as _g
-    slug = getattr(_g, 'tenant_slug', None)
-    if slug:
-        return redirect(url_for('tenant_dashboard', slug=slug))
-    # No tenant context — try first active tenant
-    try:
-        from tenant_manager import list_tenants
-        active = [t for t in list_tenants() if t.is_active]
-        if active:
-            return redirect(url_for('tenant_dashboard', slug=active[0].slug))
-    except Exception:
-        pass
-    return redirect(url_for('tenants_overview'))
+    """Root → proxy to Next.js UI."""
+    return nextjs_proxy('')
 
 
 def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
@@ -1856,11 +1990,10 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
 @app.route('/t/<slug>/dashboard')
 @login_required
 def tenant_dashboard(slug):
-    """Combined dashboard: offload + backup + storage + errors + scheduler."""
-    from flask import g
-    from tenant_manager import get_tenant_config
-    g.tenant_slug = slug
-    g.tenant_cfg = get_tenant_config(slug)
+    return redirect(f'/ui/t/{slug}/dashboard', 302)
+
+
+def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
 
     try:
         errors_page = request.args.get('errors_page', 1, type=int)
@@ -1914,8 +2047,9 @@ def tenant_dashboard(slug):
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
-    """Settings page"""
-    db = get_db()
+    return redirect('/tenants', 302)
+
+
     try:
         if request.method == 'POST':
             from config import BASE_DIR
@@ -2074,332 +2208,15 @@ def settings():
 @app.route('/tickets')
 @login_required
 def tickets():
-    """List processed tickets"""
-    import json
-    # Ensure database schema is up to date
-    try:
-        from database import _migrate_database
-        _migrate_database()
-    except Exception:
-        pass  # Migration already done or failed, continue anyway
-    
-    db = get_db()
-    try:
-        # Get settings from database for Wasabi client
-        settings_dict = {}
-        settings_list = db.query(Setting).all()
-        for s in settings_list:
-            settings_dict[s.key] = s.value
-        
-        # Get Wasabi configuration
-        from config import reload_config, WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
-        reload_config()
-        
-        endpoint = settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT
-        access_key = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
-        secret_key = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
-        bucket_name = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
-        
-        # Initialize Wasabi client for URL generation
-        wasabi_client = None
-        if endpoint and access_key and secret_key and bucket_name:
-            try:
-                endpoint = endpoint.strip() if endpoint else ""
-                if endpoint and not endpoint.startswith('http'):
-                    endpoint = f"https://{endpoint}"
-                wasabi_client = WasabiClient(
-                    endpoint=endpoint,
-                    access_key=access_key,
-                    secret_key=secret_key,
-                    bucket_name=bucket_name
-                )
-            except Exception as e:
-                # If Wasabi client fails, we'll just not show URLs
-                # Log the error but don't fail the page
-                print(f"Warning: Could not initialize Wasabi client: {e}")
-                pass
-        
-        page = request.args.get('page', 1, type=int)
-        search_query = (request.args.get('q', '') or '').strip()
-        status_filter = (request.args.get('status', '') or '').strip()
-        sort_by = request.args.get('sort', 'processed_at')
-        sort_order = request.args.get('order', 'desc')
-        per_page = 50
+    return redirect('/tenants', 302)
 
-        # Allowed sort columns
-        sort_columns = {
-            'ticket_id': ProcessedTicket.ticket_id,
-            'processed_at': ProcessedTicket.processed_at,
-            'attachments_count': ProcessedTicket.attachments_count,
-            'status': ProcessedTicket.status,
-        }
-        sort_col = sort_columns.get(sort_by, ProcessedTicket.processed_at)
-        order_fn = desc if sort_order == 'desc' else asc
 
-        # Build query with optional search filter
-        tickets_base_query = db.query(ProcessedTicket)
-        if search_query:
-            like_pattern = f"%{search_query}%"
-            tickets_base_query = tickets_base_query.filter(
-                or_(
-                    cast(ProcessedTicket.ticket_id, String).like(like_pattern),
-                    ProcessedTicket.status.like(like_pattern),
-                    ProcessedTicket.error_message.like(like_pattern),
-                    ProcessedTicket.wasabi_files.like(like_pattern)
-                )
-            )
-        if status_filter == 'has_error':
-            tickets_base_query = tickets_base_query.filter(
-                ProcessedTicket.error_message.isnot(None),
-                ProcessedTicket.error_message != ''
-            )
-        elif status_filter:
-            tickets_base_query = tickets_base_query.filter(
-                ProcessedTicket.status == status_filter
-            )
-
-        # Manual pagination
-        total = tickets_base_query.count()
-        tickets_query = tickets_base_query.order_by(
-            order_fn(sort_col)
-        ).offset((page - 1) * per_page).limit(per_page).all()
-        
-        # Generate URLs for each ticket's files
-        for ticket in tickets_query:
-            ticket.wasabi_urls = []
-            # Safely get wasabi_files attribute (may not exist in older database schemas)
-            wasabi_files = getattr(ticket, 'wasabi_files', None)
-            if wasabi_files and wasabi_client:
-                try:
-                    s3_keys = json.loads(wasabi_files)
-                    for s3_key in s3_keys:
-                        # Try presigned URL first, fallback to public URL
-                        try:
-                            url = wasabi_client.get_file_url(s3_key)
-                            if not url:
-                                url = wasabi_client.get_public_url(s3_key)
-                            if url:
-                                ticket.wasabi_urls.append({
-                                    'url': url,
-                                    'filename': s3_key.split('/')[-1] if '/' in s3_key else s3_key
-                                })
-                        except Exception:
-                            # Skip this file if URL generation fails
-                            pass
-                except (json.JSONDecodeError, TypeError, AttributeError):
-                    # Invalid JSON or missing attribute
-                    pass
-        
-        # Create pagination object
-        class Pagination:
-            def __init__(self, page, per_page, total, items):
-                self.page = page
-                self.per_page = per_page
-                self.total = total
-                self.items = items
-                self.pages = (total + per_page - 1) // per_page
-                self.has_prev = page > 1
-                self.has_next = page < self.pages
-                self.prev_num = page - 1 if self.has_prev else None
-                self.next_num = page + 1 if self.has_next else None
-            
-            def iter_pages(self, left_edge=2, right_edge=2, left_current=2, right_current=2):
-                last = self.pages
-                for num in range(1, last + 1):
-                    if num <= left_edge or \
-                       (num > self.page - left_current - 1 and num < self.page + right_current) or \
-                       num > last - right_edge:
-                        yield num
-        
-        tickets = Pagination(page, per_page, total, tickets_query)
-        
-        return render_template('tickets.html', tickets=tickets, q=search_query,
-                               status_filter=status_filter, sort=sort_by, order=sort_order)
-    finally:
-        db.close()
 
 @app.route('/storage')
 @login_required
 def storage_report():
-    """Zendesk storage usage report — read from zendesk_storage_snapshot cache table"""
-    db = get_db()
-    try:
-        page = request.args.get('page', 1, type=int)
-        search_query = (request.args.get('q', '') or '').strip()
-        sort_by = request.args.get('sort', 'size')
-        sort_order = request.args.get('order', 'desc')
-        status_filter = (request.args.get('status', '') or '').strip()
-        per_page = 50
+    return redirect('/tenants', 302)
 
-        from config import ZENDESK_SUBDOMAIN, reload_config, STORAGE_REPORT_INTERVAL
-        reload_config()
-        subdomain_row = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
-        subdomain = (subdomain_row.value if subdomain_row else None) or ZENDESK_SUBDOMAIN or 'app'
-
-        sort_map = {
-            'ticket_id':   ZendeskStorageSnapshot.ticket_id,
-            'size':        ZendeskStorageSnapshot.total_size,
-            'total_size':  ZendeskStorageSnapshot.total_size,
-            'files':       ZendeskStorageSnapshot.attach_count,
-            'updated':     ZendeskStorageSnapshot.updated_at,
-            'last_seen_at': ZendeskStorageSnapshot.updated_at,
-            'subject':     ZendeskStorageSnapshot.subject,
-            'zd_status':   ZendeskStorageSnapshot.zd_status,
-        }
-        sort_col = sort_map.get(sort_by, ZendeskStorageSnapshot.total_size)
-        order_fn = desc if sort_order == 'desc' else asc
-
-        base_q = db.query(ZendeskStorageSnapshot).filter(
-            ZendeskStorageSnapshot.total_size > 0
-        )
-        if search_query:
-            lp = f"%{search_query}%"
-            base_q = base_q.filter(
-                or_(
-                    cast(ZendeskStorageSnapshot.ticket_id, String).like(lp),
-                    ZendeskStorageSnapshot.subject.like(lp),
-                    ZendeskStorageSnapshot.zd_status.like(lp),
-                )
-            )
-        if status_filter:
-            base_q = base_q.filter(ZendeskStorageSnapshot.zd_status == status_filter)
-
-        from sqlalchemy import func as sqlfunc
-        totals = db.query(
-            sqlfunc.count(ZendeskStorageSnapshot.id).label('count'),
-            sqlfunc.sum(ZendeskStorageSnapshot.attach_count + ZendeskStorageSnapshot.inline_count).label('total_files'),
-            sqlfunc.sum(ZendeskStorageSnapshot.total_size).label('total_bytes'),
-        ).filter(ZendeskStorageSnapshot.total_size > 0).one()
-
-        # Last update timestamp
-        last_updated = db.query(sqlfunc.max(ZendeskStorageSnapshot.updated_at)).scalar()
-
-        # Next scheduled run
-        next_run = None
-        try:
-            sched = init_scheduler()
-            if sched.scheduler.running:
-                job = sched.scheduler.get_job('storage_snapshot')
-                if job and job.next_run_time:
-                    next_run = job.next_run_time.strftime('%d-%m-%Y %H:%M')
-        except Exception:
-            pass
-
-        total_rows = base_q.count()
-        rows = (
-            base_q.order_by(order_fn(sort_col))
-                  .offset((page - 1) * per_page)
-                  .limit(per_page)
-                  .all()
-        )
-
-        tickets_data = []
-        for snap in rows:
-            tickets_data.append({
-                'ticket_id':  snap.ticket_id,
-                'subject':    snap.subject or '',
-                'zd_status':  snap.zd_status or '',
-                'files':      (snap.attach_count or 0) + (snap.inline_count or 0),
-                'attach':     snap.attach_count or 0,
-                'inline':     snap.inline_count or 0,
-                'size_bytes': snap.total_size or 0,
-                'updated_at': snap.updated_at,
-                'ticket_url': f'https://{subdomain}.zendesk.com/agent/tickets/{snap.ticket_id}',
-            })
-
-        # Status counts for filter tabs
-        status_counts = {}
-        for row in db.query(ZendeskStorageSnapshot.zd_status, sqlfunc.count(ZendeskStorageSnapshot.id))\
-                     .filter(ZendeskStorageSnapshot.total_size > 0)\
-                     .group_by(ZendeskStorageSnapshot.zd_status).all():
-            status_counts[row[0] or ''] = row[1]
-
-        class Pagination:
-            def __init__(self, page, per_page, total):
-                self.page = page; self.per_page = per_page; self.total = total
-                self.pages = max(1, (total + per_page - 1) // per_page)
-                self.has_prev = page > 1
-                self.has_next = page < self.pages
-                self.prev_num = page - 1 if self.has_prev else None
-                self.next_num = page + 1 if self.has_next else None
-            def iter_pages(self, left_edge=2, right_edge=2, left_current=2, right_current=2):
-                for num in range(1, self.pages + 1):
-                    if (num <= left_edge or
-                            (num > self.page - left_current - 1 and num < self.page + right_current) or
-                            num > self.pages - right_edge):
-                        yield num
-
-        is_empty = (db.query(ZendeskStorageSnapshot).count() == 0)
-
-        # ── Scan progress ──────────────────────────
-        snap_scanned = db.query(ZendeskStorageSnapshot).count()
-        cache_total = db.query(ZendeskTicketCache).count()
-        scan_pct = round(snap_scanned / cache_total * 100, 1) if cache_total else 0
-
-        # ── Offloaded stats ─────────────────────────
-        offloaded_tickets = db.query(ProcessedTicket).filter(
-            ProcessedTicket.wasabi_files.isnot(None),
-            ProcessedTicket.wasabi_files != '',
-            ProcessedTicket.wasabi_files != '[]',
-        ).count()
-        tickets_with_files = db.query(ProcessedTicket).filter(
-            ProcessedTicket.attachments_count > 0
-        ).count()
-
-        # Real offloaded bytes from Wasabi
-        offloaded_bytes = 0
-        try:
-            from config import WASABI_ENDPOINT, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET_NAME
-            settings_dict = {s.key: s.value for s in db.query(Setting).all()}
-            w_ep = (settings_dict.get('WASABI_ENDPOINT') or WASABI_ENDPOINT or '').strip()
-            w_ak = settings_dict.get('WASABI_ACCESS_KEY') or WASABI_ACCESS_KEY
-            w_sk = settings_dict.get('WASABI_SECRET_KEY') or WASABI_SECRET_KEY
-            w_bk = settings_dict.get('WASABI_BUCKET_NAME') or WASABI_BUCKET_NAME
-            if all([w_ep, w_ak, w_sk, w_bk]):
-                if not w_ep.startswith('http'):
-                    w_ep = f'https://{w_ep}'
-                wc = WasabiClient(endpoint=w_ep, access_key=w_ak,
-                                  secret_key=w_sk, bucket_name=w_bk)
-                ws = wc.get_storage_stats()
-                offloaded_bytes = ws.get('total_bytes', 0) or 0
-        except Exception:
-            pass
-
-        # ── Plan limit from settings ────────────────
-        limit_row = db.query(Setting).filter_by(key='ZENDESK_STORAGE_LIMIT_GB').first()
-        plan_limit_gb = 0.0
-        if limit_row and limit_row.value:
-            try:
-                plan_limit_gb = float(limit_row.value)
-            except (ValueError, TypeError):
-                pass
-
-        return render_template(
-            'storage.html',
-            tickets=tickets_data,
-            pagination=Pagination(page, per_page, total_rows),
-            q=search_query,
-            sort=sort_by,
-            order=sort_order,
-            status_filter=status_filter,
-            status_counts=status_counts,
-            total_tickets=totals.count or 0,
-            total_files=totals.total_files or 0,
-            total_bytes=totals.total_bytes or 0,
-            last_updated=last_updated,
-            next_run=next_run,
-            is_empty=is_empty,
-            storage_interval=STORAGE_REPORT_INTERVAL,
-            scan_scanned=snap_scanned,
-            scan_total=cache_total,
-            scan_pct=scan_pct,
-            offloaded_bytes=int(offloaded_bytes),
-            offloaded_tickets=offloaded_tickets,
-            tickets_with_files=tickets_with_files,
-            plan_limit_gb=plan_limit_gb,
-        )
-    finally:
-        db.close()
 
 
 @app.route('/api/storage_report/refresh', methods=['POST'])
@@ -2416,167 +2233,31 @@ def storage_report_refresh():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@app.route('/api/t/<slug>/storage/refresh', methods=['POST'])
+@login_required
+def tenant_storage_refresh(slug):
+    """Manually trigger a storage snapshot refresh for a specific tenant."""
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'success': False, 'message': 'Tenant not found'}), 404
+    try:
+        sched = init_scheduler()
+        import threading
+        t = threading.Thread(target=sched.storage_snapshot_job, daemon=True,
+                             name=f'storage-snap-manual-{slug}')
+        t.start()
+        return jsonify({'success': True, 'message': f'Storage snapshot refresh started for {cfg.display_name or slug}.'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 # ── Closed-Ticket Backup ─────────────────────────────────────────────
 @app.route('/ticket_backup')
 @login_required
 def ticket_backup():
-    """Closed-ticket backup status page — shows ALL closed tickets (LEFT JOIN backup items)."""
-    db = get_db()
-    try:
-        page = request.args.get('page', 1, type=int)
-        search_query = (request.args.get('q', '') or '').strip()
-        status_filter = (request.args.get('status', '') or '').strip()
-        sort_by = request.args.get('sort', 'ticket_id')
-        sort_order = request.args.get('order', 'desc')
-        per_page = 50
+    return redirect('/tenants', 302)
 
-        from sqlalchemy import func as sqlfunc, outerjoin, literal
-
-        # ── aggregate counts from backup items ───────────────────────────
-        status_counts = {}
-        for row in db.query(TicketBackupItem.backup_status, sqlfunc.count(TicketBackupItem.id))\
-                      .group_by(TicketBackupItem.backup_status).all():
-            status_counts[row[0] or ''] = row[1]
-
-        success_count = status_counts.get('success', 0)
-        failed_count  = status_counts.get('failed', 0)
-        pending_count = status_counts.get('pending', 0)
-        skipped_count = status_counts.get('skipped', 0)
-
-        total_bytes = db.query(sqlfunc.sum(TicketBackupItem.total_bytes)).filter(
-            TicketBackupItem.backup_status == 'success'
-        ).scalar() or 0
-        total_files = db.query(sqlfunc.sum(TicketBackupItem.files_count)).filter(
-            TicketBackupItem.backup_status == 'success'
-        ).scalar() or 0
-
-        closed_cache_count = db.query(sqlfunc.count(ZendeskTicketCache.ticket_id)).filter(
-            ZendeskTicketCache.status == 'closed'
-        ).scalar() or 0
-
-        # ── LEFT JOIN: all closed cache tickets + their backup item (if any) ──
-        # We build a combined list using a raw SQL approach for simplicity
-        from sqlalchemy import text as sa_text
-
-        sort_col_sql = {
-            'ticket_id':      'c.ticket_id',
-            'closed_at':      'b.closed_at',
-            'backup_status':  "COALESCE(b.backup_status, 'pending')",
-            'last_backup_at': 'b.last_backup_at',
-            'files_count':    'COALESCE(b.files_count, 0)',
-            'total_bytes':    'COALESCE(b.total_bytes, 0)',
-        }.get(sort_by, 'c.ticket_id')
-        order_dir = 'DESC' if sort_order == 'desc' else 'ASC'
-
-        where_clauses = ["c.status = 'closed'"]
-        params = {}
-
-        if search_query:
-            where_clauses.append(
-                "(CAST(c.ticket_id AS TEXT) LIKE :sq "
-                "OR COALESCE(b.backup_status,'pending') LIKE :sq "
-                "OR COALESCE(b.s3_prefix,'') LIKE :sq "
-                "OR COALESCE(b.last_error,'') LIKE :sq)"
-            )
-            params['sq'] = f'%{search_query}%'
-
-        if status_filter:
-            if status_filter == 'pending':
-                where_clauses.append("b.ticket_id IS NULL")
-            else:
-                where_clauses.append("b.backup_status = :sf")
-                params['sf'] = status_filter
-
-        where_sql = ' AND '.join(where_clauses)
-
-        count_sql = sa_text(
-            f"SELECT COUNT(*) FROM zendesk_ticket_cache c "
-            f"LEFT JOIN ticket_backup_items b ON c.ticket_id = b.ticket_id "
-            f"WHERE {where_sql}"
-        )
-        total_rows = db.execute(count_sql, params).scalar() or 0
-
-        data_sql = sa_text(
-            f"SELECT c.ticket_id, c.subject, "
-            f"  b.closed_at, b.last_backup_at, "
-            f"  COALESCE(b.backup_status, 'pending') AS backup_status, "
-            f"  COALESCE(b.files_count, 0) AS files_count, "
-            f"  COALESCE(b.total_bytes, 0) AS total_bytes, "
-            f"  COALESCE(b.s3_prefix, '') AS s3_prefix, "
-            f"  COALESCE(b.last_error, '') AS last_error "
-            f"FROM zendesk_ticket_cache c "
-            f"LEFT JOIN ticket_backup_items b ON c.ticket_id = b.ticket_id "
-            f"WHERE {where_sql} "
-            f"ORDER BY {sort_col_sql} {order_dir} "
-            f"LIMIT :lim OFFSET :off"
-        )
-        params['lim'] = per_page
-        params['off'] = (page - 1) * per_page
-        rows = db.execute(data_sql, params).fetchall()
-
-        # pending = closed tickets with no backup item
-        pending_count = closed_cache_count - success_count - failed_count - skipped_count
-        status_counts['pending'] = max(0, pending_count)
-
-        # Last run info
-        last_run = db.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
-
-        items_data = []
-        for row in rows:
-            items_data.append({
-                'ticket_id':     row.ticket_id,
-                'subject':       row.subject or '',
-                'closed_at':     row.closed_at,
-                'last_backup_at': row.last_backup_at,
-                'backup_status': row.backup_status,
-                'files_count':   row.files_count or 0,
-                'total_bytes':   row.total_bytes or 0,
-                's3_prefix':     row.s3_prefix or '',
-                'last_error':    row.last_error or '',
-            })
-
-        class Pagination:
-            def __init__(self, page, per_page, total):
-                self.page = page; self.per_page = per_page; self.total = total
-                self.pages = max(1, (total + per_page - 1) // per_page)
-                self.has_prev = page > 1
-                self.has_next = page < self.pages
-                self.prev_num = page - 1 if self.has_prev else None
-                self.next_num = page + 1 if self.has_next else None
-            def iter_pages(self, left_edge=2, right_edge=2, left_current=2, right_current=2):
-                for num in range(1, self.pages + 1):
-                    if (num <= left_edge or
-                            (num > self.page - left_current - 1 and num < self.page + right_current) or
-                            num > self.pages - right_edge):
-                        yield num
-
-        # Zendesk subdomain for ticket links
-        from config import ZENDESK_SUBDOMAIN
-        sub_row = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
-        subdomain = (sub_row.value if sub_row else None) or ZENDESK_SUBDOMAIN or 'app'
-
-        return render_template(
-            'ticket_backup.html',
-            items=items_data,
-            pagination=Pagination(page, per_page, total_rows),
-            q=search_query,
-            sort=sort_by,
-            order=sort_order,
-            status_filter=status_filter,
-            status_counts=status_counts,
-            total_items=total_rows,
-            success_count=success_count,
-            failed_count=failed_count,
-            pending_count=pending_count,
-            skipped_count=skipped_count,
-            total_bytes=int(total_bytes),
-            total_files=int(total_files),
-            closed_cache_count=closed_cache_count,
-            last_run=last_run,
-            subdomain=subdomain,
-        )
-    finally:
-        db.close()
 
 
 @app.route('/api/ticket_backup_now', methods=['POST'])
@@ -2956,100 +2637,7 @@ def explorer_zendesk_proxy():
 @app.route('/logs')
 @login_required
 def logs():
-    """Unified log viewer — reads rotated app.log.YYYY-MM-DD files from logs/."""
-    import os as _os, re as _re
-    from config import BASE_DIR
-
-    slug = getattr(_flask_g, 'tenant_slug', None) or ''
-    logs_dir = BASE_DIR / 'logs'
-
-    # Enumerate available log dates (app.log.YYYY-MM-DD + today's app.log)
-    available_dates = []
-    today_str = datetime.utcnow().strftime('%Y-%m-%d')
-    if (logs_dir / 'app.log').exists():
-        available_dates.append(today_str)
-    for fname in sorted(_os.listdir(str(logs_dir)), reverse=True):
-        m = _re.match(r'^app\.log\.(\d{4}-\d{2}-\d{2})$', fname)
-        if m:
-            available_dates.append(m.group(1))
-    # deduplicate while preserving order
-    seen = set()
-    available_dates = [d for d in available_dates if not (d in seen or seen.add(d))]
-
-    selected_date = request.args.get('date', today_str)
-    level_filter = (request.args.get('level', '') or '').upper()
-    search_q = (request.args.get('q', '') or '').strip().lower()
-    page = request.args.get('page', 1, type=int)
-    per_page = 200
-
-    # Read the selected log file
-    if selected_date == today_str:
-        log_file = logs_dir / 'app.log'
-    else:
-        log_file = logs_dir / f'app.log.{selected_date}'
-
-    raw_lines = []
-    if log_file.exists():
-        try:
-            with open(str(log_file), 'r', errors='replace') as fh:
-                raw_lines = fh.readlines()
-        except Exception as exc:
-            logger.warning(f'Could not read log file {log_file}: {exc}')
-
-    # Parse lines into structured entries
-    log_pattern = _re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+-\s+\S+\s+-\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+-\s+(.*)$'
-    )
-    entries = []
-    current = None
-    for raw in raw_lines:
-        raw = raw.rstrip('\n')
-        m = log_pattern.match(raw)
-        if m:
-            if current:
-                entries.append(current)
-            current = {'ts': m.group(1), 'level': m.group(2), 'msg': m.group(3), 'extra': []}
-        else:
-            if current and raw.strip():
-                current['extra'].append(raw)
-
-    if current:
-        entries.append(current)
-
-    # Most-recent first
-    entries.reverse()
-
-    # Filter
-    if level_filter:
-        entries = [e for e in entries if e['level'] == level_filter]
-    if search_q:
-        entries = [e for e in entries
-                   if search_q in e['msg'].lower() or
-                      any(search_q in x.lower() for x in e['extra'])]
-
-    total = len(entries)
-    pages = max(1, (total + per_page - 1) // per_page)
-    page = max(1, min(page, pages))
-    paged = entries[(page - 1) * per_page: page * per_page]
-
-    # Level counts for the filter tabs
-    from collections import Counter
-    level_counts = Counter(e['level'] for e in entries)
-
-    return render_template(
-        'logs.html',
-        slug=slug,
-        entries=paged,
-        total=total,
-        page=page,
-        pages=pages,
-        per_page=per_page,
-        available_dates=available_dates,
-        selected_date=selected_date,
-        level_filter=level_filter,
-        search_q=search_q,
-        level_counts=level_counts,
-    )
+    return redirect('/tenants', 302)
 
 
 @app.route('/logs_old')
@@ -3205,7 +2793,7 @@ def api_dashboard_stats(slug):
     """JSON stats for live dashboard auto-refresh (every 60s)."""
     try:
         from sqlalchemy import func as sqlfunc
-        from tenant_manager import get_tenant_db_session
+        from tenant_manager import get_tenant_db_session, get_tenant_config
         from datetime import timedelta
 
         now = datetime.utcnow()
@@ -3304,7 +2892,10 @@ def api_dashboard_stats(slug):
         if int(error_tickets_count) > 0:
             red_flags_ui.append(f'{int(error_tickets_count)} ticket{"s" if int(error_tickets_count)!=1 else ""} with offload errors')
 
+        tenant_cfg = get_tenant_config(slug)
         return jsonify({
+            'display_name': tenant_cfg.display_name if tenant_cfg else slug,
+            'color': tenant_cfg.color if tenant_cfg else '',
             'total_tickets': total_tickets,
             'total_attachments': total_attachments,
             'total_bytes': total_bytes,
@@ -3685,51 +3276,8 @@ def offload_ticket(ticket_id):
 @app.route('/recheck_report')
 @login_required
 def recheck_report():
-    """Dedicated page showing live progress and the last completed recheck-all report"""
-    import json
-    sched = init_scheduler()
-    status = sched.get_recheck_status()
-    running = status['running']
-    summary = status.get('summary')
+    return redirect('/tools', 302)
 
-    # Get Zendesk subdomain for ticket links
-    from config import reload_config, ZENDESK_SUBDOMAIN
-    reload_config()
-    db = get_db()
-    try:
-        sd_setting = db.query(Setting).filter_by(key='ZENDESK_SUBDOMAIN').first()
-        zendesk_subdomain = (sd_setting.value if sd_setting else None) or ZENDESK_SUBDOMAIN or ''
-
-        # Also try to load the most recent recheck_all OffloadLog from DB as fallback
-        logs = db.query(OffloadLog).order_by(OffloadLog.run_date.desc()).all()
-        last_log = None
-        for log in logs:
-            if log.details:
-                try:
-                    d = json.loads(log.details)
-                    if isinstance(d, dict) and d.get('run_mode') == 'recheck_all':
-                        last_log = log
-                        last_log._parsed = d
-                        break
-                except Exception:
-                    pass
-    finally:
-        db.close()
-
-    # Sanitize summary for JSON serialization (datetime objects → ISO strings)
-    safe_summary = None
-    if summary:
-        safe_summary = _sanitize_for_json(summary)
-
-    return render_template(
-        'recheck_report.html',
-        running=running,
-        started_at=status.get('started_at'),
-        progress=status.get('progress', {}),
-        summary=safe_summary,
-        last_log=last_log,
-        zendesk_subdomain=zendesk_subdomain,
-    )
 
 @app.route('/api/scheduler/start', methods=['POST'])
 @login_required
@@ -4145,7 +3693,7 @@ def _reset_admin_password_internal():
 
 # ── Global Tools Page ──────────────────────────────────────────────────────────
 
-@app.route('/tools')
+@app.route('/tools_legacy')
 @login_required
 def tools():
     """Network & infrastructure diagnostics tools page."""
@@ -4420,18 +3968,39 @@ def tools_speedtest():
 
 # ─── Next.js UI proxy ─────────────────────────────────────────────────────────
 
-@app.route('/ui', defaults={'path': ''})
-@app.route('/ui/<path:path>')
+@app.route('/ui', defaults={'_legacy_path': ''})
+@app.route('/ui/<path:_legacy_path>')
+def nextjs_legacy_redirect(_legacy_path):
+    """Redirect old /ui/* bookmarks to /."""
+    return redirect('/' + _legacy_path if _legacy_path else '/', 301)
+
+
+@app.route('/_next/<path:path>')
+@app.route('/_next')
+def nextjs_static(path=''):
+    """Proxy Next.js built static assets."""
+    return nextjs_proxy('_next/' + path if path else '_next')
+
+
+@app.route('/<path:path>', endpoint='nextjs_catchall')
+@login_required
+def nextjs_catchall(path):
+    """Catch-all: proxy any non-Flask route to the Next.js standalone server."""
+    return nextjs_proxy(path)
+
+
 def nextjs_proxy(path):
-    """Proxy all /ui/* requests to the Next.js standalone server on port 3000."""
+    """Proxy requests to the Next.js standalone server on port 3000."""
     from flask import Response as _Response
     ui_host = os.environ.get('NEXTJS_URL', 'http://127.0.0.1:3000')
-    target = f'{ui_host}/ui/{path}' if path else f'{ui_host}/ui'
+    target = f'{ui_host}/{path}' if path else f'{ui_host}/'
     if request.query_string:
         target += '?' + request.query_string.decode('utf-8', errors='replace')
     try:
         excluded_req = {'host', 'content-length', 'transfer-encoding'}
         fwd_headers = {k: v for k, v in request.headers if k.lower() not in excluded_req}
+        # Ask Next.js not to gzip so we can stream plainly
+        fwd_headers['Accept-Encoding'] = 'identity'
         resp = requests.request(
             method=request.method,
             url=target,
@@ -4440,11 +4009,10 @@ def nextjs_proxy(path):
             cookies=request.cookies,
             allow_redirects=False,
             timeout=30,
-            stream=True,
         )
         excluded_resp = {'content-encoding', 'content-length', 'transfer-encoding', 'connection'}
         headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_resp]
-        return _Response(resp.raw.read(), status=resp.status_code, headers=headers)
+        return _Response(resp.content, status=resp.status_code, headers=headers)
     except requests.exceptions.ConnectionError:
         return _Response('Next.js UI server is not running. Start z2w-ui service.', status=503,
                          mimetype='text/plain')

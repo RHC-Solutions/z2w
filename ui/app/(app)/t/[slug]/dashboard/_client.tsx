@@ -56,18 +56,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <div className="flex items-center gap-2.5">
-            {stats.color && (
-              <span
-                className="w-3 h-3 rounded-full flex-shrink-0"
-                style={{ backgroundColor: stats.color }}
-              />
-            )}
-            <h1 className="text-2xl font-bold">
-              {stats.display_name || slug}
-            </h1>
-            <span className="text-sm text-muted-foreground font-normal">/ Dashboard</span>
-          </div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">{slug}.zendesk.com · auto-refreshes every {REFRESH_S}s</p>
         </div>
         <div className="flex items-center gap-2">

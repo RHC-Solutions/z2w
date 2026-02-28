@@ -80,18 +80,16 @@ class BackupManager:
             parent_dir = self.app_dir.parent
             app_folder_name = self.app_dir.name
             
-            # Set GZIP environment variable to use absolute path
             env = os.environ.copy()
-            env['GZIP'] = '-9'  # Maximum compression
             env['PATH'] = '/usr/bin:/bin:/usr/local/bin'  # Ensure gzip is in PATH
             
             cmd = [
                 '/usr/bin/tar',
-                '--use-compress-program=/usr/bin/gzip',
-                '-cf',
+                '-czf',
                 str(backup_path),
                 '-C',
                 str(parent_dir),
+                '--warning=no-file-changed',
                 *exclude_patterns,
                 app_folder_name
             ]
@@ -105,11 +103,16 @@ class BackupManager:
                 env=env
             )
             
-            if result.returncode != 0:
+            # tar exit code 1 = some files changed during read (warning, not fatal)
+            # tar exit code 2 = fatal error
+            if result.returncode > 1:
                 error_msg = f"Backup command failed: {result.stderr}"
                 logger.error(error_msg)
                 summary['error'] = error_msg
                 return False, None, summary
+            
+            if result.returncode == 1 and result.stderr:
+                logger.warning(f"Backup completed with warnings: {result.stderr.strip()}")
             
             # Check if backup file was created
             if not backup_path.exists():

@@ -41,6 +41,15 @@ function ResultBox({ state, output }: { state: RunState; output: string }) {
   );
 }
 
+async function apiGetText(url: string): Promise<{ ok: boolean; text: string }> {
+  try {
+    const r = await fetch(url, { credentials: "include" });
+    const text = await r.text();
+    return { ok: r.ok, text };
+  } catch (e) {
+    return { ok: false, text: String(e) };
+  }
+}
 async function apiGet(url: string) {
   const r = await fetch(url, { credentials: "include" });
   return r.json();
@@ -64,9 +73,9 @@ function PingTool() {
   async function run() {
     setState("loading");
     setOutput("");
-    const d = await apiGet(`/api/tools/ping?host=${encodeURIComponent(host)}`);
-    setState(d.success ? "done" : "err");
-    setOutput(d.output || d.error || "No output");
+    const { ok, text } = await apiGetText(`/api/tools/ping?host=${encodeURIComponent(host)}`);
+    setState(ok ? "done" : "err");
+    setOutput(text || "No output");
   }
 
   return (
@@ -104,9 +113,9 @@ function TracerouteTool() {
   async function run() {
     setState("loading");
     setOutput("");
-    const d = await apiGet(`/api/tools/traceroute?host=${encodeURIComponent(host)}`);
-    setState(d.success ? "done" : "err");
-    setOutput(d.output || d.error || "No output");
+    const { ok, text } = await apiGetText(`/api/tools/traceroute?host=${encodeURIComponent(host)}`);
+    setState(ok ? "done" : "err");
+    setOutput(text || "No output");
   }
 
   return (
@@ -144,9 +153,9 @@ function DnsTool() {
   async function run() {
     setState("loading");
     setOutput("");
-    const d = await apiGet(`/api/tools/dns?host=${encodeURIComponent(host)}`);
-    setState(d.success ? "done" : "err");
-    setOutput(d.output || d.error || "No output");
+    const { ok, text } = await apiGetText(`/api/tools/dns?host=${encodeURIComponent(host)}`);
+    setState(ok ? "done" : "err");
+    setOutput(text || "No output");
   }
 
   return (
@@ -182,17 +191,10 @@ function SpeedTestTool() {
 
   async function run() {
     setState("loading");
-    setOutput("");
-    const d = await apiGet(`/api/tools/speedtest`);
-    setState(d.success ? "done" : "err");
-    if (d.results) {
-      const r = d.results;
-      setOutput(
-        `Upload:   ${r.upload_speed ?? "—"}\nDownload: ${r.download_speed ?? "—"}\nLatency:  ${r.latency ?? "—"}\nServer:   ${r.server ?? "—"}`
-      );
-    } else {
-      setOutput(d.error || d.message || "No output");
-    }
+    setOutput("Starting speed test — this may take several minutes…");
+    const { ok, text } = await apiGetText(`/api/tools/speedtest`);
+    setState(ok ? "done" : "err");
+    setOutput(text || "No output");
   }
 
   return (
@@ -273,7 +275,7 @@ function SysInfoTool() {
     setState("loading");
     setOutput("");
     try {
-      const d = await apiGet(`/api/dashboard_stats`);
+      const d = await apiGet(`/api/tenants/overview`);
       setState("done");
       setOutput(JSON.stringify(d, null, 2));
     } catch (e) {

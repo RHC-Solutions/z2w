@@ -37,6 +37,7 @@ export default function TicketsPage() {
   const { slug } = useParams<{ slug: string }>();
   const [data, setData] = useState<TicketsResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const [qDraft, setQDraft] = useState("");
@@ -46,11 +47,12 @@ export default function TicketsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const d = await getTenantTickets(slug, { page, q: q || undefined, status: status || undefined, sort, order });
       setData(d);
-    } catch (_e) {
-      // ignore
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load tickets");
     } finally {
       setLoading(false);
     }
@@ -136,7 +138,7 @@ export default function TicketsPage() {
           </div>
         ) : !data || data.tickets.length === 0 ? (
           <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
-            No tickets found.
+            {error ? <span className="text-destructive">{error}</span> : "No tickets found."}
           </div>
         ) : (
           <Table>

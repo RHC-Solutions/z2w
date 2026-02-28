@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { getTenantBackup, runBackupNow, BackupResult, fmtBytes } from "@/lib/api";
+import { getTenantBackup, runTenantBackupNow, BackupResult, fmtBytes } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,11 +37,15 @@ export default function BackupPage() {
   const [data, setData] = useState<BackupResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setError(null);
     try {
       setData(await getTenantBackup(slug));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load backup data");
     } finally {
       setLoading(false);
     }
@@ -51,7 +55,7 @@ export default function BackupPage() {
 
   async function handleRunNow() {
     setRunning(true);
-    try { await runBackupNow(); } finally { setRunning(false); }
+    try { await runTenantBackupNow(slug); } catch (_e) { /* ignore */ } finally { setRunning(false); }
     setTimeout(() => load(), 3000);
   }
 
@@ -65,7 +69,7 @@ export default function BackupPage() {
   }
 
   if (!data) {
-    return <div className="p-6 text-sm text-muted-foreground">Failed to load backup data.</div>;
+    return <div className="p-6 text-sm text-destructive">{error || "Failed to load backup data."}</div>;
   }
 
   const statusCounts = data.status_counts;

@@ -14,6 +14,7 @@ interface Tenant {
   slug: string;
   display_name: string;
   is_active: boolean;
+  color: string;
 }
 
 export function Sidebar() {
@@ -31,6 +32,18 @@ export function Sidebar() {
         setExpanded(init);
       })
       .catch(() => {});
+  }, []);
+
+  // Refresh tenant list (color, name) when settings are saved
+  useEffect(() => {
+    function refetch() {
+      fetch("/api/tenants/list", { credentials: "include" })
+        .then((r) => r.json())
+        .then((d) => setTenants(d.tenants ?? []))
+        .catch(() => {});
+    }
+    window.addEventListener("z2w:tenantUpdated", refetch);
+    return () => window.removeEventListener("z2w:tenantUpdated", refetch);
   }, []);
 
   const toggle = (slug: string) =>
@@ -65,7 +78,8 @@ export function Sidebar() {
                 "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               )}
             >
-              <Database size={15} className={cn("flex-shrink-0", t.is_active ? "text-primary" : "text-muted-foreground")} />
+              <Database size={15} className={cn("flex-shrink-0", t.is_active ? "text-primary" : "text-muted-foreground")}
+                style={t.color ? { color: t.color } : undefined} />
               <span className="flex-1 text-left truncate font-medium">{t.display_name}</span>
               {!t.is_active && <span className="text-[9px] text-muted-foreground border border-border rounded px-1">off</span>}
               {expanded[t.slug] ? <ChevronUp size={13} /> : <ChevronDown size={13} />}

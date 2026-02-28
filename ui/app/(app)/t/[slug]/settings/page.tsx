@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import {
   getTenantSettings,
   saveTenantSettings,
+  testTenantConnection,
   TenantSettings,
 } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +27,45 @@ import {
   Upload,
   CheckCircle2,
   XCircle,
+  Loader2,
+  Wifi,
 } from "lucide-react";
+
+function TestButton({ slug, type }: { slug: string; type: string }) {
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function handleTest() {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await testTenantConnection(slug, type);
+      setResult(r);
+    } catch (e: unknown) {
+      setResult({ success: false, message: e instanceof Error ? e.message : "Error" });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button size="sm" variant="outline" onClick={handleTest} disabled={testing}>
+        {testing
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+          : <Wifi className="w-3.5 h-3.5 mr-1" />
+        }
+        Test Connection
+      </Button>
+      {result && (
+        <span className={`text-xs flex items-center gap-1 ${result.success ? "text-emerald-400" : "text-destructive"}`}>
+          {result.success ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+          {result.message}
+        </span>
+      )}
+    </div>
+  );
+}
 
 type DraftSettings = Omit<TenantSettings, "slug">;
 
@@ -102,6 +141,8 @@ export default function SettingsPage() {
       await saveTenantSettings(slug, settings);
       setSaved(true);
       setTimeout(() => setSaved(null), 3000);
+      // Notify sidebar to refresh tenant list (color, name changes)
+      window.dispatchEvent(new CustomEvent('z2w:tenantUpdated'));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Save failed");
       setSaved(false);
@@ -201,6 +242,43 @@ export default function SettingsPage() {
           <FieldRow label="Display Name" full>
             <Input value={settings.display_name} onChange={(e) => set("display_name", e.target.value)} />
           </FieldRow>
+          <FieldRow label="Tenant Color" hint="Used for the sidebar icon and dashboard badge">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-md border border-border flex-shrink-0 cursor-pointer relative overflow-hidden"
+                style={{ backgroundColor: settings.color || "#14b8a6" }}
+              >
+                <input
+                  type="color"
+                  value={settings.color || "#14b8a6"}
+                  onChange={(e) => set("color", e.target.value)}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  title="Pick a color"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {["#14b8a6","#3b82f6","#8b5cf6","#ec4899","#f97316","#22c55e","#ef4444","#eab308","#06b6d4","#64748b"].map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => set("color", c)}
+                    className="w-5 h-5 rounded-full border-2 transition-all hover:scale-110"
+                    style={{
+                      backgroundColor: c,
+                      borderColor: settings.color === c ? "white" : "transparent",
+                    }}
+                  />
+                ))}
+              </div>
+              <Input
+                value={settings.color || ""}
+                onChange={(e) => set("color", e.target.value)}
+                placeholder="#14b8a6"
+                className="w-28 font-mono text-xs"
+                maxLength={7}
+              />
+            </div>
+          </FieldRow>
         </CardContent>
       </Card>
 
@@ -227,7 +305,7 @@ export default function SettingsPage() {
             />
           </FieldRow>
         </CardContent>
-        <div className="px-6 pb-4"><SaveBar /></div>
+        <div className="px-6 pb-4 flex items-center justify-between"><SaveBar /><TestButton slug={slug} type="zendesk" /></div>
       </Card>
 
       {/* Wasabi — Offload */}
@@ -251,7 +329,7 @@ export default function SettingsPage() {
             <Input type="password" value={settings.wasabi_secret_key} onChange={(e) => set("wasabi_secret_key", e.target.value)} placeholder="(unchanged if ●●●)" />
           </FieldRow>
         </CardContent>
-        <div className="px-6 pb-4"><SaveBar /></div>
+        <div className="px-6 pb-4 flex items-center justify-between"><SaveBar /><TestButton slug={slug} type="wasabi" /></div>
       </Card>
 
       {/* Wasabi — Backup */}
@@ -269,7 +347,7 @@ export default function SettingsPage() {
             <Input value={settings.ticket_backup_bucket} onChange={(e) => set("ticket_backup_bucket", e.target.value)} />
           </FieldRow>
         </CardContent>
-        <div className="px-6 pb-4"><SaveBar /></div>
+        <div className="px-6 pb-4 flex items-center justify-between"><SaveBar /><TestButton slug={slug} type="wasabi_backup" /></div>
       </Card>
 
       {/* Scheduler */}
@@ -322,7 +400,7 @@ export default function SettingsPage() {
             <Input value={settings.telegram_chat_id} onChange={(e) => set("telegram_chat_id", e.target.value)} />
           </FieldRow>
         </CardContent>
-        <div className="px-6 pb-4"><SaveBar /></div>
+        <div className="px-6 pb-4 flex items-center justify-between"><SaveBar /><TestButton slug={slug} type="telegram" /></div>
       </Card>
 
       {/* Slack */}
@@ -338,7 +416,7 @@ export default function SettingsPage() {
             <Input value={settings.slack_webhook_url} onChange={(e) => set("slack_webhook_url", e.target.value)} placeholder="https://hooks.slack.com/services/…" />
           </FieldRow>
         </CardContent>
-        <div className="px-6 pb-4"><SaveBar /></div>
+        <div className="px-6 pb-4 flex items-center justify-between"><SaveBar /><TestButton slug={slug} type="slack" /></div>
       </Card>
 
       {/* Alerts */}

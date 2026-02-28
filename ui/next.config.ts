@@ -2,12 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   // Standalone output: creates a self-contained Node.js server
-  // Flask will proxy /ui/* requests to the Next.js process
+  // Flask will proxy all non-API requests to the Next.js process
   output: "standalone",
-  basePath: "/ui",
+  basePath: "",
   trailingSlash: false,
 
-  // Proxy all /api and /login calls to Flask in all environments
+  // Proxy all /api and /login calls to Flask in dev mode
   async rewrites() {
     const flaskBase = process.env.FLASK_URL ?? "http://localhost:5000";
     return [

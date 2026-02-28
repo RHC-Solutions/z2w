@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Z2W — Zendesk to Wasabi",
+  title: "Zendesk 2 Wasabi by RHC Solutions",
   description: "Attachment offloader admin panel",
 };
 

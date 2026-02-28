@@ -109,7 +109,8 @@ function TenantCardView({ card, onToggle }: { card: TenantCard; onToggle: () => 
   }
 
   return (
-    <Card className="bg-card border-border hover:border-primary/30 transition-colors">
+    <Link href={`/t/${card.slug}/dashboard`} className="block group">
+    <Card className="bg-card border-border hover:border-primary/40 group-hover:bg-card/80 transition-colors cursor-pointer">
       <CardContent className="pt-5 pb-5">
         {/* Top row */}
         <div className="flex items-start justify-between mb-4">
@@ -193,23 +194,24 @@ function TenantCardView({ card, onToggle }: { card: TenantCard; onToggle: () => 
         </div>
 
         {/* Actions */}
-        <div className="flex gap-2">
-          <Link href={`/t/${card.slug}/dashboard`} className="flex-1">
+        <div className="flex gap-2" onClick={(e) => e.preventDefault()}>
+          <Link href={`/t/${card.slug}/dashboard`} className="flex-1" onClick={(e) => e.stopPropagation()}>
             <Button size="sm" className="w-full">
               <ExternalLink size={13} className="mr-1.5" /> Open
             </Button>
           </Link>
-          <Link href={`/t/${card.slug}/settings`}>
+          <Link href={`/t/${card.slug}/settings`} onClick={(e) => e.stopPropagation()}>
             <Button size="sm" variant="outline">
               <Settings size={13} className="mr-1.5" /> Settings
             </Button>
           </Link>
-          <Button size="sm" variant="outline" onClick={handleToggle} disabled={toggling}>
+          <Button size="sm" variant="outline" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleToggle(); }} disabled={toggling}>
             {card.is_active ? "Disable" : "Enable"}
           </Button>
         </div>
       </CardContent>
     </Card>
+    </Link>
   );
 }
 

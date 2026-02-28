@@ -75,7 +75,7 @@ export default function StoragePage() {
   }
 
   async function handleRefreshSnapshot() {
-    await fetch(`/api/storage_report/refresh`, { method: "POST", credentials: "include" });
+    await fetch(`/api/t/${slug}/storage/refresh`, { method: "POST", credentials: "include" });
     setTimeout(() => load(), 2000);
   }
 
@@ -172,7 +172,9 @@ export default function StoragePage() {
                 <TableHead className="text-xs w-40">
                   <SortHeader label="Size" field="size" sort={sort} order={order} onSort={handleSort} />
                 </TableHead>
-                <TableHead className="text-xs">Updated</TableHead>
+                <TableHead className="text-xs">
+                  <SortHeader label="Updated" field="updated_at" sort={sort} order={order} onSort={handleSort} />
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
