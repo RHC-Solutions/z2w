@@ -93,7 +93,7 @@ export default function DashboardPage() {
         <StatCard icon={<Archive size={15} />} label="Tickets Backed Up" value={fmtNum(stats.backup_success)} color="success" />
         <StatCard icon={<Clock size={15} />} label="Last Offload" value={stats.last_offload_ago ?? "Never"} sub={stats.offload_scheduler_running ? "● Running" : "● Stopped"} subColor={stats.offload_scheduler_running ? "success" : "muted"} />
         <StatCard icon={<AlertCircle size={15} />} label="Ticket Errors" value={fmtNum(stats.error_tickets_count)} color={stats.error_tickets_count > 0 ? "destructive" : undefined} />
-        <StatCard icon={<Zap size={15} />} label="Today's Activity" value={fmtNum(stats.today_tickets)} sub={`${stats.today_attachments} attach · ${stats.today_inlines} inline · ${stats.today_runs} runs`} />
+        <StatCard icon={<Zap size={15} />} label="Today's Activity" value={fmtNum(stats.today_tickets)} sub={`${stats.today_att} attach · ${stats.today_inlines} inline · ${stats.today_runs} runs`} />
       </div>
 
       {/* Scheduler + recent errors */}

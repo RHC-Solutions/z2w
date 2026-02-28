@@ -4418,6 +4418,41 @@ def tools_speedtest():
 
     return Response(stream_with_context(generate()), mimetype='text/plain')
 
+# ─── Next.js UI proxy ─────────────────────────────────────────────────────────
+
+@app.route('/ui', defaults={'path': ''})
+@app.route('/ui/<path:path>')
+def nextjs_proxy(path):
+    """Proxy all /ui/* requests to the Next.js standalone server on port 3000."""
+    from flask import Response as _Response
+    ui_host = os.environ.get('NEXTJS_URL', 'http://127.0.0.1:3000')
+    target = f'{ui_host}/ui/{path}' if path else f'{ui_host}/ui'
+    if request.query_string:
+        target += '?' + request.query_string.decode('utf-8', errors='replace')
+    try:
+        excluded_req = {'host', 'content-length', 'transfer-encoding'}
+        fwd_headers = {k: v for k, v in request.headers if k.lower() not in excluded_req}
+        resp = requests.request(
+            method=request.method,
+            url=target,
+            headers=fwd_headers,
+            data=request.get_data(),
+            cookies=request.cookies,
+            allow_redirects=False,
+            timeout=30,
+            stream=True,
+        )
+        excluded_resp = {'content-encoding', 'content-length', 'transfer-encoding', 'connection'}
+        headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_resp]
+        return _Response(resp.raw.read(), status=resp.status_code, headers=headers)
+    except requests.exceptions.ConnectionError:
+        return _Response('Next.js UI server is not running. Start z2w-ui service.', status=503,
+                         mimetype='text/plain')
+    except Exception as exc:
+        logger.error(f'Next.js proxy error: {exc}')
+        return _Response(f'Proxy error: {exc}', status=502, mimetype='text/plain')
+
+
 if __name__ == '__main__':
     # Initialize database
     from database import init_db

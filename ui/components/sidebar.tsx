@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import {
   Users, LayoutDashboard, FileText, Settings, Wrench,
-  ChevronDown, ChevronUp, LogOut, Database,
+  ChevronDown, ChevronUp, LogOut, Database, Ticket, HardDrive,
+  Archive, PlusCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,6 @@ export function Sidebar() {
       .then((r) => r.json())
       .then((d) => {
         setTenants(d.tenants ?? []);
-        // auto-expand all by default
         const init: Record<string, boolean> = {};
         (d.tenants ?? []).forEach((t: Tenant) => { init[t.slug] = true; });
         setExpanded(init);
@@ -53,10 +53,11 @@ export function Sidebar() {
         {/* GLOBAL */}
         <p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Global</p>
         <NavItem href="/tenants" icon={<Users size={15} />} label="Tenants" active={isActive("/tenants")} />
+        <NavItem href="/wizard" icon={<PlusCircle size={15} />} label="Add Tenant" active={isActive("/wizard")} />
 
         {/* PER-TENANT */}
         {tenants.map((t) => (
-          <div key={t.slug}>
+          <div key={t.slug} className="mt-1">
             <button
               onClick={() => toggle(t.slug)}
               className={cn(
@@ -64,13 +65,17 @@ export function Sidebar() {
                 "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               )}
             >
-              <Database size={15} className="text-primary flex-shrink-0" />
+              <Database size={15} className={cn("flex-shrink-0", t.is_active ? "text-primary" : "text-muted-foreground")} />
               <span className="flex-1 text-left truncate font-medium">{t.display_name}</span>
+              {!t.is_active && <span className="text-[9px] text-muted-foreground border border-border rounded px-1">off</span>}
               {expanded[t.slug] ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
             {expanded[t.slug] && (
-              <div className="ml-4 pl-2 border-l border-border space-y-0.5">
+              <div className="ml-4 pl-2 border-l border-border space-y-0.5 mb-1">
                 <NavItem href={`/t/${t.slug}/dashboard`} icon={<LayoutDashboard size={14} />} label="Dashboard" active={isActive(`/t/${t.slug}/dashboard`)} small />
+                <NavItem href={`/t/${t.slug}/tickets`} icon={<Ticket size={14} />} label="Tickets" active={isActive(`/t/${t.slug}/tickets`)} small />
+                <NavItem href={`/t/${t.slug}/backup`} icon={<Archive size={14} />} label="Backup" active={isActive(`/t/${t.slug}/backup`)} small />
+                <NavItem href={`/t/${t.slug}/storage`} icon={<HardDrive size={14} />} label="Storage" active={isActive(`/t/${t.slug}/storage`)} small />
                 <NavItem href={`/t/${t.slug}/logs`} icon={<FileText size={14} />} label="Logs" active={isActive(`/t/${t.slug}/logs`)} small />
                 <NavItem href={`/t/${t.slug}/settings`} icon={<Settings size={14} />} label="Settings" active={isActive(`/t/${t.slug}/settings`)} small />
               </div>

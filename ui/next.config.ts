@@ -1,22 +1,21 @@
 import type { NextConfig } from "next";
 
-const isProd = process.env.NODE_ENV === "production";
-
 const nextConfig: NextConfig = {
-  // Static export for Flask to serve
-  output: isProd ? "export" : undefined,
-  basePath: isProd ? "/ui" : "",
-  trailingSlash: true,
+  // Standalone output: creates a self-contained Node.js server
+  // Flask will proxy /ui/* requests to the Next.js process
+  output: "standalone",
+  basePath: "/ui",
+  trailingSlash: false,
 
-  // Dev: proxy all /api and /login calls to Flask
+  // Proxy all /api and /login calls to Flask in all environments
   async rewrites() {
-    if (isProd) return [];
+    const flaskBase = process.env.FLASK_URL ?? "http://localhost:5000";
     return [
-      { source: "/api/:path*", destination: "http://localhost:5000/api/:path*" },
-      { source: "/login", destination: "http://localhost:5000/login" },
-      { source: "/login/:path*", destination: "http://localhost:5000/login/:path*" },
-      { source: "/logout", destination: "http://localhost:5000/logout" },
-      { source: "/static/:path*", destination: "http://localhost:5000/static/:path*" },
+      { source: "/api/:path*", destination: `${flaskBase}/api/:path*` },
+      { source: "/login", destination: `${flaskBase}/login` },
+      { source: "/login/:path*", destination: `${flaskBase}/login/:path*` },
+      { source: "/logout", destination: `${flaskBase}/logout` },
+      { source: "/static/:path*", destination: `${flaskBase}/static/:path*` },
     ];
   },
 };
