@@ -2,13 +2,12 @@
 
 **z2w** is a production automation stack that continuously offloads Zendesk ticket attachments and inline images to **Wasabi S3-compatible storage**, rewrites the original comment URLs inside Zendesk, and redacts the source files — reducing Zendesk storage costs with zero manual effort.
 
-The project ships three sub-components:
+The project ships two sub-components:
 
 | Component | Path | Stack |
 |---|---|---|
 | **Offloader daemon + Admin panel** | `/opt/z2w/` | Python 3 · Flask · APScheduler · SQLite |
-| **Ticket Explorer** | `explorer/` | Next.js 16 · Tailwind v4 · shadcn/ui |
-| **UX sandbox** | `uz/` | Next.js 16 · Tailwind v4 · Base UI |
+| **Ticket Explorer** | `explorer/` | Next.js 16 · React 19 · Tailwind v4 · shadcn/ui |
 
 ---
 
@@ -22,10 +21,11 @@ The project ships three sub-components:
 6. [Admin Panel](#admin-panel)
 7. [How It Works](#how-it-works)
 8. [Ticket Explorer (Next.js)](#ticket-explorer-nextjs)
-9. [Backup System](#backup-system)
-10. [Troubleshooting](#troubleshooting)
-11. [Security](#security)
-12. [Maintenance](#maintenance)
+9. [Multi-Tenant Architecture](#multi-tenant-architecture)
+10. [Backup System](#backup-system)
+11. [Troubleshooting](#troubleshooting)
+12. [Security](#security)
+13. [Maintenance](#maintenance)
 
 ---
 
@@ -44,6 +44,7 @@ The project ships three sub-components:
 | **SQLite WAL mode** | Concurrent read/write with minimal locking |
 | **Per-ticket logging** | Every action logged to `offload_logs` + `processed_tickets` tables |
 | **Configurable rate limits** | `MAX_ATTACHMENTS_PER_RUN`, `TICKET_BACKUP_MAX_PER_RUN`, daily limits |
+| **Multi-tenant** | Isolated per-tenant databases and data directories via `global.db` registry |
 | **Backup system** | Daily tar.gz snapshots of database + logs, archived to Wasabi |
 | **SSL** | Self-signed cert auto-generated on first run; replaceable with CA cert |
 
@@ -62,6 +63,7 @@ The project ships three sub-components:
 ├── zendesk_client.py         # Zendesk REST API wrapper
 ├── wasabi_client.py          # boto3/S3 wrapper for Wasabi
 ├── oauth_auth.py             # Microsoft OIDC flow (MSAL)
+├── tenant_manager.py         # Multi-tenant system (global.db + per-tenant data dirs)
 ├── backup_manager.py         # Tar/upload backup logic
 ├── ticket_backup_manager.py  # Closed-ticket metadata backup to Wasabi
 ├── email_reporter.py         # SMTP summary emails
@@ -85,11 +87,16 @@ The project ships three sub-components:
 │   ├── login.html            # Login page (password + OAuth button)
 │   ├── storage.html          # Wasabi storage usage
 │   ├── ticket_backup.html    # Ticket backup status
-│   └── recheck_report.html   # Recheck progress feed
+│   ├── recheck_report.html   # Recheck progress feed
+│   ├── tenants.html          # Multi-tenant management
+│   └── tenant_settings.html  # Per-tenant settings
 ├── static/                   # Favicon, logo assets
 ├── logs/                     # Daily rotating log files (archived monthly)
 ├── backups/                  # Local backup archives
 ├── tickets.db                # SQLite database (auto-created)
+├── global.db                 # Multi-tenant registry
+├── tenants/                  # Per-tenant data directories
+│   └── <slug>/tickets.db    # Tenant-isolated database
 ├── requirements.txt
 ├── run_debian.sh             # Quick start script for Debian
 ├── setup_debian.sh           # Full system setup script
@@ -101,12 +108,8 @@ explorer/                     # Ticket Explorer Next.js app
 │   ├── components/           # UI components (ExplorerShell, panels, shadcn/ui)
 │   ├── hooks/                # Custom React hooks
 │   └── lib/                  # API client, storage utils
+├── out/                      # Pre-built static export (served by Flask)
 └── package.json
-
-uz/                           # UX sandbox Next.js app
-├── app/                      # Next.js App Router pages
-├── components/               # UI components (Base UI, shadcn/ui)
-└── lib/                      # Shared utilities
 ```
 
 ---
@@ -117,7 +120,7 @@ uz/                           # UX sandbox Next.js app
 
 - Debian 12 / Ubuntu 22.04+ (64-bit)
 - Python 3.11+
-- Node.js 20+ (for `explorer` / `uz` only)
+- Node.js 20+ (for `explorer` only)
 - `sudo` access
 - A Zendesk Admin API token
 - A Wasabi account + bucket
@@ -332,6 +335,7 @@ Access at `https://<server-ip>:<ADMIN_PANEL_PORT>/` (default: port 5000).
 | **Storage Usage** | Per-bucket object count and bytes from Wasabi, fetched live. |
 | **Ticket Backup** | Status and controls for the closed-ticket metadata backup job. |
 | **Settings** | Live `.env` editor — no restart needed for most keys. |
+| **Tenants** | Create and configure isolated tenants, each with their own database and Zendesk credentials. |
 
 ---
 
@@ -363,13 +367,13 @@ Fetches the *complete* solved ticket history from Zendesk (all pages) and diffs 
 
 ## Ticket Explorer (Next.js)
 
-The `explorer/` app is a standalone Next.js 16 frontend for browsing and inspecting offloaded tickets.
+The `explorer/` app is a standalone Next.js 16 frontend for browsing and inspecting offloaded tickets. It is built as a static export and served by Flask at `/explorer/app/`. Zendesk API calls from the browser are proxied through a Flask route (`/explorer/api/proxy`) to avoid CORS issues.
 
 ```bash
 cd /opt/z2w/explorer
 npm install
 npm run dev      # http://localhost:3000
-npm run build    # production build
+npm run build    # static export to explorer/out/
 npm run lint     # ESLint check
 ```
 
@@ -378,12 +382,36 @@ npm run lint     # ESLint check
 | Path | Purpose |
 |---|---|
 | `src/app/` | App Router pages |
-| `src/components/ExplorerShell.tsx` | Main shell layout |
-| `src/components/panels/` | Panel components |
+| `src/components/ExplorerShell.tsx` | Main shell layout with tab navigation |
+| `src/components/panels/` | TicketsPanel, FilesPanel components |
 | `src/lib/api.ts` | API calls to the Flask backend |
 | `src/lib/storage.ts` | Local state persistence |
 
-The `uz/` app is a UI sandbox for prototyping new components using Base UI and Tailwind v4. Run identically with `npm run dev` from `uz/`.
+---
+
+## Multi-Tenant Architecture
+
+z2w supports running multiple isolated Zendesk tenants from a single installation. Each tenant gets its own database and data directory, while sharing the same offloader codebase.
+
+### How it works
+
+| Resource | Path | Purpose |
+|---|---|---|
+| **Global registry** | `global.db` | Stores tenant definitions (`tenants` + `tenant_settings` tables) |
+| **Tenant data** | `tenants/<slug>/tickets.db` | Per-tenant isolated database |
+| **Legacy mode** | `tickets.db` | Single-tenant fallback (root-level DB) |
+
+Tenant management is handled by `tenant_manager.py`. The admin panel includes dedicated pages for creating and configuring tenants (`/tenants`, `/tenant/<slug>/settings`).
+
+### Databases
+
+| Database | Tables | Purpose |
+|---|---|---|
+| `tickets.db` | `processed_tickets`, `offload_logs`, `zendesk_ticket_cache`, `zendesk_storage_snapshot`, `ticket_backup_runs`, `ticket_backup_items`, `settings` | Main per-instance DB |
+| `global.db` | `tenants`, `tenant_settings` | Multi-tenant registry |
+| `tenants/<slug>/tickets.db` | Same schema as root `tickets.db` | Tenant-isolated data |
+
+All SQLite databases use WAL mode with `busy_timeout=30000` and `NullPool` (each session gets its own connection) for concurrent read/write safety between the Flask thread and APScheduler background jobs.
 
 ---
 
@@ -492,7 +520,6 @@ find /opt/z2w -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
 # Next.js
 rm -rf /opt/z2w/explorer/.next /opt/z2w/explorer/out
-rm -rf /opt/z2w/uz/.next
 ```
 
 ### Log archive

@@ -468,8 +468,7 @@ def logout():
 @login_required
 def tenants_overview():
     """Global tenant management page."""
-    from tenant_manager import list_tenants, get_tenant_config
-    from database import SessionLocal
+    from tenant_manager import list_tenants, get_tenant_config, get_tenant_db_session
     from sqlalchemy import func as sqlfunc
 
     tenant_rows = list_tenants()
@@ -499,9 +498,9 @@ def tenants_overview():
             'storage_bytes': 0,
             'red_flags': [],
         }
-        # Pull stats from legacy DB where the offloader writes (best-effort)
+        # Pull stats from tenant DB (best-effort)
         try:
-            tdb = SessionLocal()
+            tdb = get_tenant_db_session(t.slug)
             from database import ProcessedTicket, OffloadLog, TicketBackupItem, TicketBackupRun
             from datetime import timedelta
             now = datetime.utcnow()
@@ -607,6 +606,112 @@ def tenant_delete(slug):
     from tenant_manager import delete_tenant
     ok = delete_tenant(slug, remove_data=False)  # soft-delete
     return jsonify({'success': ok})
+
+
+@app.route('/api/tenants/list')
+@login_required
+def api_tenants_list():
+    """Lightweight tenant list for sidebar."""
+    from tenant_manager import list_tenants
+    tenants = list_tenants()
+    return jsonify({'tenants': [
+        {'slug': t.slug, 'display_name': t.display_name or t.slug, 'is_active': t.is_active}
+        for t in tenants
+    ]})
+
+
+@app.route('/api/tenants/overview')
+@login_required
+def api_tenants_overview():
+    """JSON version of tenants_overview for the Next.js UI."""
+    from tenant_manager import list_tenants, get_tenant_config, get_tenant_db_session
+    from sqlalchemy import func as sqlfunc
+
+    tenant_rows = list_tenants()
+    cards = []
+    for t in tenant_rows:
+        cfg = get_tenant_config(t.slug)
+        card = {
+            'slug': t.slug,
+            'display_name': t.display_name or t.slug,
+            'is_active': t.is_active,
+            'created_at': t.created_at.isoformat() if t.created_at else None,
+            'configured': cfg.is_configured if cfg else False,
+            'zendesk_subdomain': (cfg.zendesk_subdomain or t.slug) if cfg else t.slug,
+            'wasabi_bucket': cfg.wasabi_bucket_name if cfg else '',
+            'tickets_processed': 0,
+            'tickets_backed_up': 0,
+            'total_attachments': 0,
+            'total_inlines_offloaded': 0,
+            'total_bytes_offloaded': 0,
+            'total_runs': 0,
+            'last_offload_ago': None,
+            'last_backup_run': None,
+            'errors_today': 0,
+            'red_flags': [],
+        }
+        try:
+            tdb = get_tenant_db_session(t.slug)
+            from database import ProcessedTicket, OffloadLog, TicketBackupItem, TicketBackupRun
+            now = datetime.utcnow()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            card['tickets_processed'] = tdb.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
+            card['tickets_backed_up'] = tdb.query(sqlfunc.count(TicketBackupItem.id))\
+                .filter(TicketBackupItem.backup_status == 'success').scalar() or 0
+            att_row = tdb.query(
+                sqlfunc.sum(ProcessedTicket.attachments_count),
+                sqlfunc.sum(ProcessedTicket.wasabi_files_size),
+            ).first()
+            card['total_attachments'] = int(att_row[0] or 0)
+            card['total_bytes_offloaded'] = int(att_row[1] or 0)
+            inlines_row = tdb.query(sqlfunc.sum(OffloadLog.inlines_uploaded)).scalar()
+            card['total_inlines_offloaded'] = int(inlines_row or 0)
+            card['total_runs'] = tdb.query(sqlfunc.count(OffloadLog.id)).scalar() or 0
+            last_log = tdb.query(OffloadLog).order_by(OffloadLog.run_date.desc()).first()
+            if last_log:
+                card['errors_today'] = last_log.errors_count or 0
+                diff = now - last_log.run_date
+                mins = int(diff.total_seconds() // 60)
+                if mins < 60:
+                    card['last_offload_ago'] = f'{mins}m ago'
+                elif mins < 1440:
+                    card['last_offload_ago'] = f'{mins // 60}h ago'
+                else:
+                    card['last_offload_ago'] = f'{mins // 1440}d ago'
+                if (now - last_log.run_date).total_seconds() > 7200:
+                    card['red_flags'].append('No offload in 2h+')
+            last_bak = tdb.query(TicketBackupRun).order_by(TicketBackupRun.run_date.desc()).first()
+            if last_bak:
+                card['last_backup_run'] = {
+                    'run_date': last_bak.run_date.isoformat(),
+                    'tickets_scanned': last_bak.tickets_scanned or 0,
+                    'tickets_backed_up': last_bak.tickets_backed_up or 0,
+                    'files_uploaded': last_bak.files_uploaded or 0,
+                    'bytes_uploaded': last_bak.bytes_uploaded or 0,
+                    'errors_count': last_bak.errors_count or 0,
+                    'status': last_bak.status or 'completed',
+                }
+                if (last_bak.errors_count or 0) > 0:
+                    card['red_flags'].append(f'Last backup had {last_bak.errors_count} error(s)')
+            if card['errors_today'] > 5:
+                card['red_flags'].append(f'{card["errors_today"]} offload errors')
+            tdb.close()
+        except Exception as _e:
+            logger.warning(f"api_tenants_overview: stats failed for {t.slug}: {_e}")
+        cards.append(card)
+
+    fleet = {
+        'total': len(cards),
+        'active': sum(1 for c in cards if c['is_active']),
+        'configured': sum(1 for c in cards if c['configured']),
+        'tickets_processed': sum(c['tickets_processed'] for c in cards),
+        'total_attachments': sum(c['total_attachments'] for c in cards),
+        'total_inlines': sum(c['total_inlines_offloaded'] for c in cards),
+        'total_bytes': sum(c['total_bytes_offloaded'] for c in cards),
+        'tickets_backed_up': sum(c['tickets_backed_up'] for c in cards),
+        'issues': sum(1 for c in cards if c['red_flags']),
+    }
+    return jsonify({'cards': cards, 'fleet': fleet})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -932,6 +1037,365 @@ def tenant_settings(slug):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JSON API — Settings GET/POST  (for Next.js UI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/settings', methods=['GET', 'POST'])
+@login_required
+def api_tenant_settings_json(slug):
+    """GET → return current settings as JSON. POST → accept JSON body and save."""
+    from tenant_manager import get_tenant_config, save_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    if request.method == 'GET':
+        d = cfg.to_dict()
+        d.pop('db_path', None)
+        # Mask secret fields for GET
+        for secret in ('zendesk_api_token', 'wasabi_secret_key', 'telegram_bot_token'):
+            if d.get(secret):
+                d[secret] = '••••••••'
+        return jsonify(d)
+
+    # POST — JSON body
+    data = request.get_json(force=True) or {}
+    for field_name in ['display_name', 'zendesk_subdomain', 'zendesk_email',
+                       'zendesk_api_token', 'wasabi_endpoint', 'wasabi_access_key',
+                       'wasabi_secret_key', 'wasabi_bucket_name',
+                       'ticket_backup_endpoint', 'ticket_backup_bucket',
+                       'telegram_bot_token', 'telegram_chat_id',
+                       'slack_webhook_url', 'slack_bot_token',
+                       'scheduler_timezone', 'ticket_backup_time']:
+        if field_name in data and data[field_name] not in (None, '', '••••••••'):
+            setattr(cfg, field_name, data[field_name])
+    for int_field in ['continuous_offload_interval', 'attach_offload_interval_minutes',
+                      'ticket_backup_interval_minutes', 'ticket_backup_max_per_run',
+                      'max_attachments_per_run', 'storage_report_interval']:
+        if int_field in data:
+            try:
+                setattr(cfg, int_field, int(data[int_field]))
+            except (ValueError, TypeError):
+                pass
+    for bool_field in ['attach_offload_enabled', 'ticket_backup_enabled',
+                       'alert_on_offload_error', 'alert_on_backup_error',
+                       'alert_daily_report', 'alert_daily_telegram', 'alert_daily_slack',
+                       'alert_include_offload_stats', 'alert_include_backup_stats',
+                       'alert_include_errors_detail']:
+        if bool_field in data:
+            setattr(cfg, bool_field, bool(data[bool_field]))
+    save_tenant_config(cfg)
+    return jsonify({'success': True})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JSON API — Tickets  (for Next.js UI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/tickets')
+@login_required
+def api_tenant_tickets_json(slug):
+    """Paginated ticket list for a tenant."""
+    from tenant_manager import get_tenant_config, get_tenant_db_session
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+    db = get_tenant_db_session(slug)
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        q = (request.args.get('q', '') or '').strip()
+        status_filter = (request.args.get('status', '') or '').strip()
+        sort_by = request.args.get('sort', 'processed_at')
+        sort_order = request.args.get('order', 'desc')
+
+        sort_columns = {
+            'ticket_id': ProcessedTicket.ticket_id,
+            'processed_at': ProcessedTicket.processed_at,
+            'attachments_count': ProcessedTicket.attachments_count,
+            'status': ProcessedTicket.status,
+        }
+        sort_col = sort_columns.get(sort_by, ProcessedTicket.processed_at)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        base_q = db.query(ProcessedTicket)
+        if q:
+            lp = f'%{q}%'
+            base_q = base_q.filter(
+                or_(cast(ProcessedTicket.ticket_id, String).like(lp),
+                    ProcessedTicket.status.like(lp),
+                    ProcessedTicket.error_message.like(lp))
+            )
+        if status_filter == 'has_error':
+            base_q = base_q.filter(ProcessedTicket.error_message.isnot(None),
+                                   ProcessedTicket.error_message != '')
+        elif status_filter:
+            base_q = base_q.filter(ProcessedTicket.status == status_filter)
+
+        total = base_q.count()
+        rows = base_q.order_by(order_fn(sort_col)).offset((page - 1) * per_page).limit(per_page).all()
+
+        tickets_out = []
+        for t in rows:
+            tickets_out.append({
+                'ticket_id': t.ticket_id,
+                'status': t.status,
+                'attachments_count': t.attachments_count or 0,
+                'inlines_offloaded': t.inlines_offloaded or 0,
+                'bytes_offloaded': t.bytes_offloaded or 0,
+                'processed_at': t.processed_at.isoformat() if t.processed_at else None,
+                'error_message': t.error_message or None,
+                'ticket_url': f'https://{cfg.zendesk_subdomain}.zendesk.com/agent/tickets/{t.ticket_id}',
+            })
+
+        # Status counts
+        from sqlalchemy import func as sqlfunc
+        status_counts = {}
+        for row in db.query(ProcessedTicket.status, sqlfunc.count(ProcessedTicket.id)).group_by(ProcessedTicket.status).all():
+            status_counts[row[0] or ''] = row[1]
+
+        return jsonify({
+            'tickets': tickets_out,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'pages': max(1, (total + per_page - 1) // per_page),
+            'status_counts': status_counts,
+        })
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JSON API — Logs  (for Next.js UI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/logs')
+@login_required
+def api_tenant_logs_json(slug):
+    """Paginated structured log entries from app.log.* files."""
+    import os as _os, re as _re
+    from config import BASE_DIR
+    from tenant_manager import get_tenant_config
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+
+    logs_dir = BASE_DIR / 'logs'
+    today_str = datetime.utcnow().strftime('%Y-%m-%d')
+    available_dates = []
+    if (logs_dir / 'app.log').exists():
+        available_dates.append(today_str)
+    for fname in sorted(_os.listdir(str(logs_dir)), reverse=True):
+        m = _re.match(r'^app\.log\.(\d{4}-\d{2}-\d{2})$', fname)
+        if m:
+            available_dates.append(m.group(1))
+    seen = set()
+    available_dates = [d for d in available_dates if not (d in seen or seen.add(d))]
+
+    selected_date = request.args.get('date', today_str)
+    level_filter = (request.args.get('level', '') or '').upper()
+    search_q = (request.args.get('q', '') or '').strip().lower()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 200, type=int)
+
+    log_file = logs_dir / 'app.log' if selected_date == today_str else logs_dir / f'app.log.{selected_date}'
+    raw_lines = []
+    if log_file.exists():
+        try:
+            with open(str(log_file), 'r', errors='replace') as fh:
+                raw_lines = fh.readlines()
+        except Exception:
+            pass
+
+    log_pattern = _re.compile(
+        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+-\s+\S+\s+-\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+-\s+(.*)$'
+    )
+    entries = []
+    current = None
+    for raw in raw_lines:
+        raw = raw.rstrip('\n')
+        m = log_pattern.match(raw)
+        if m:
+            if current:
+                entries.append(current)
+            current = {'ts': m.group(1), 'level': m.group(2), 'msg': m.group(3), 'extra': []}
+        else:
+            if current and raw.strip():
+                current['extra'].append(raw)
+    if current:
+        entries.append(current)
+    entries.reverse()
+
+    if level_filter:
+        entries = [e for e in entries if e['level'] == level_filter]
+    if search_q:
+        entries = [e for e in entries if search_q in e['msg'].lower() or any(search_q in x.lower() for x in e['extra'])]
+
+    from collections import Counter
+    level_counts = dict(Counter(e['level'] for e in entries))
+    total = len(entries)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, pages))
+    paged = entries[(page - 1) * per_page: page * per_page]
+
+    return jsonify({
+        'entries': paged,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'pages': pages,
+        'available_dates': available_dates,
+        'level_counts': level_counts,
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JSON API — Ticket Backup  (for Next.js UI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/backup')
+@login_required
+def api_tenant_backup_json(slug):
+    """Ticket backup runs + items for a tenant."""
+    from tenant_manager import get_tenant_config, get_tenant_db_session
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+    db = get_tenant_db_session(slug)
+    try:
+        from sqlalchemy import func as sqlfunc
+
+        # Recent backup runs
+        runs = db.query(TicketBackupRun).order_by(desc(TicketBackupRun.id)).limit(20).all()
+        runs_out = [{
+            'id': r.id,
+            'run_date': r.run_date.isoformat() if r.run_date else None,
+            'tickets_scanned': r.tickets_scanned or 0,
+            'tickets_backed_up': r.tickets_backed_up or 0,
+            'files_uploaded': r.files_uploaded or 0,
+            'bytes_uploaded': r.bytes_uploaded or 0,
+            'errors_count': r.errors_count or 0,
+            'status': r.status or 'unknown',
+            'error_message': r.error_message or None,
+        } for r in runs]
+
+        # Aggregate totals
+        totals = db.query(
+            sqlfunc.count(TicketBackupRun.id).label('total_runs'),
+            sqlfunc.sum(TicketBackupRun.tickets_backed_up).label('total_tickets'),
+            sqlfunc.sum(TicketBackupRun.bytes_uploaded).label('total_bytes'),
+        ).one()
+
+        # Items status breakdown
+        status_counts = {}
+        for row in db.query(TicketBackupItem.backup_status, sqlfunc.count(TicketBackupItem.id)).group_by(TicketBackupItem.backup_status).all():
+            status_counts[row[0] or 'unknown'] = row[1]
+
+        return jsonify({
+            'runs': runs_out,
+            'totals': {
+                'total_runs': totals.total_runs or 0,
+                'total_tickets': int(totals.total_tickets or 0),
+                'total_bytes': int(totals.total_bytes or 0),
+            },
+            'status_counts': status_counts,
+            'backup_enabled': cfg.ticket_backup_enabled,
+            'backup_time': cfg.ticket_backup_time,
+        })
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JSON API — Storage Snapshot  (for Next.js UI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/t/<slug>/storage')
+@login_required
+def api_tenant_storage_json(slug):
+    """Zendesk storage snapshot for a tenant."""
+    from tenant_manager import get_tenant_config, get_tenant_db_session
+    cfg = get_tenant_config(slug)
+    if not cfg:
+        return jsonify({'error': 'Tenant not found'}), 404
+    db = get_tenant_db_session(slug)
+    try:
+        from sqlalchemy import func as sqlfunc
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        q = (request.args.get('q', '') or '').strip()
+        status_filter = (request.args.get('status', '') or '').strip()
+        sort_by = request.args.get('sort', 'size')
+        sort_order = request.args.get('order', 'desc')
+
+        sort_map = {
+            'ticket_id': ZendeskStorageSnapshot.ticket_id,
+            'size': ZendeskStorageSnapshot.total_size,
+            'files': ZendeskStorageSnapshot.attach_count,
+            'subject': ZendeskStorageSnapshot.subject,
+            'status': ZendeskStorageSnapshot.zd_status,
+        }
+        sort_col = sort_map.get(sort_by, ZendeskStorageSnapshot.total_size)
+        order_fn = desc if sort_order == 'desc' else asc
+
+        base_q = db.query(ZendeskStorageSnapshot).filter(ZendeskStorageSnapshot.total_size > 0)
+        if q:
+            lp = f'%{q}%'
+            base_q = base_q.filter(or_(
+                cast(ZendeskStorageSnapshot.ticket_id, String).like(lp),
+                ZendeskStorageSnapshot.subject.like(lp),
+                ZendeskStorageSnapshot.zd_status.like(lp),
+            ))
+        if status_filter:
+            base_q = base_q.filter(ZendeskStorageSnapshot.zd_status == status_filter)
+
+        totals = db.query(
+            sqlfunc.count(ZendeskStorageSnapshot.id).label('count'),
+            sqlfunc.sum(ZendeskStorageSnapshot.total_size).label('total_bytes'),
+        ).filter(ZendeskStorageSnapshot.total_size > 0).one()
+
+        last_updated = db.query(sqlfunc.max(ZendeskStorageSnapshot.updated_at)).scalar()
+        total = base_q.count()
+        rows = base_q.order_by(order_fn(sort_col)).offset((page - 1) * per_page).limit(per_page).all()
+
+        tickets_out = [{
+            'ticket_id': snap.ticket_id,
+            'subject': snap.subject or '',
+            'zd_status': snap.zd_status or '',
+            'files': (snap.attach_count or 0) + (snap.inline_count or 0),
+            'attach': snap.attach_count or 0,
+            'inline': snap.inline_count or 0,
+            'size_bytes': snap.total_size or 0,
+            'updated_at': snap.updated_at.isoformat() if snap.updated_at else None,
+            'ticket_url': f'https://{cfg.zendesk_subdomain}.zendesk.com/agent/tickets/{snap.ticket_id}',
+        } for snap in rows]
+
+        status_counts = {}
+        for row in db.query(ZendeskStorageSnapshot.zd_status, sqlfunc.count(ZendeskStorageSnapshot.id))\
+                     .filter(ZendeskStorageSnapshot.total_size > 0)\
+                     .group_by(ZendeskStorageSnapshot.zd_status).all():
+            status_counts[row[0] or ''] = row[1]
+
+        return jsonify({
+            'tickets': tickets_out,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'pages': max(1, (total + per_page - 1) // per_page),
+            'totals': {
+                'count': totals.count or 0,
+                'total_bytes': int(totals.total_bytes or 0),
+            },
+            'last_updated': last_updated.isoformat() if last_updated else None,
+            'status_counts': status_counts,
+            'subdomain': cfg.zendesk_subdomain,
+        })
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SETTINGS EXPORT / IMPORT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1191,8 +1655,7 @@ def index():
 def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
     """Gather all data for the combined dashboard for a given tenant slug."""
     import json as _json
-    from tenant_manager import get_tenant_config
-    from database import SessionLocal
+    from tenant_manager import get_tenant_config, get_tenant_db_session
     from sqlalchemy import func as sqlfunc
     from datetime import timedelta
 
@@ -1200,7 +1663,7 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    db = SessionLocal()
+    db = get_tenant_db_session(slug)
     try:
         # ── Headline stats ─────────────────────────────────────────────
         total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
@@ -1334,6 +1797,15 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
         # ── Zendesk subdomain for ticket links ─────────────────────────
         subdomain = (cfg.zendesk_subdomain if cfg else '') or slug
 
+        # ── Red flags / alerts ─────────────────────────────────────────
+        red_flags = []
+        if last_log and last_log.run_date and (now - last_log.run_date) > timedelta(hours=2):
+            red_flags.append('No offload in 2h+')
+        if last_bak and (last_bak.errors_count or 0) > 0:
+            red_flags.append(f'Last backup had {last_bak.errors_count} error{"s" if last_bak.errors_count != 1 else ""}')
+        if int(error_tickets_count) > 0:
+            red_flags.append(f'{int(error_tickets_count)} ticket{"s" if int(error_tickets_count) != 1 else ""} with offload errors')
+
         return dict(
             slug=slug,
             cfg=cfg,
@@ -1373,6 +1845,8 @@ def _build_dashboard_data(slug, errors_page=1, errors_per_page=20):
             recent_backup_runs=recent_backup_runs,
             ticket_rows=ticket_rows,
             subdomain=subdomain,
+            # Alerts
+            red_flags=red_flags,
         )
     finally:
         db.close()
@@ -2731,13 +3205,13 @@ def api_dashboard_stats(slug):
     """JSON stats for live dashboard auto-refresh (every 60s)."""
     try:
         from sqlalchemy import func as sqlfunc
-        from database import SessionLocal
+        from tenant_manager import get_tenant_db_session
         from datetime import timedelta
 
         now = datetime.utcnow()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        db = SessionLocal()
+        db = get_tenant_db_session(slug)
         try:
             total_tickets = db.query(sqlfunc.count(ProcessedTicket.id)).scalar() or 0
             att_row = db.query(
@@ -2823,6 +3297,13 @@ def api_dashboard_stats(slug):
         except Exception:
             pass
 
+        # Build red_flags for the UI
+        red_flags_ui = []
+        if last_log and last_log.run_date and (datetime.utcnow() - last_log.run_date).total_seconds() > 7200:
+            red_flags_ui.append('No offload in 2h+')
+        if int(error_tickets_count) > 0:
+            red_flags_ui.append(f'{int(error_tickets_count)} ticket{"s" if int(error_tickets_count)!=1 else ""} with offload errors')
+
         return jsonify({
             'total_tickets': total_tickets,
             'total_attachments': total_attachments,
@@ -2842,6 +3323,7 @@ def api_dashboard_stats(slug):
             'offload_next': offload_next,
             'backup_next': backup_next,
             'recent_errors': recent_errors,
+            'red_flags': red_flags_ui,
         })
     except Exception as exc:
         logger.error(f'Dashboard stats error for {slug}: {exc}', exc_info=True)
@@ -2852,6 +3334,13 @@ def api_dashboard_stats(slug):
 def privacy():
     """Privacy Policy page"""
     return render_template('privacy.html')
+
+@app.route('/api/session')
+def api_session():
+    """Return current session info for Next.js UI."""
+    if session.get('authenticated'):
+        return jsonify({'authenticated': True, 'user_email': session.get('user_email'), 'user_name': session.get('user_name')})
+    return jsonify({'authenticated': False}), 401
 
 @app.route('/cookies')
 def cookies():

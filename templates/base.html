@@ -75,9 +75,9 @@
       border-bottom: 1px solid var(--sidebar-border);
       min-height: 54px;
     }
-    .sidebar-logo { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; }
-    .sidebar-title { font-size: 14px; font-weight: 700; color: var(--sidebar-foreground); white-space: nowrap; overflow: hidden; line-height: 1.1; }
-    .sidebar-subtitle { font-size: 11.5px; color: var(--sidebar-muted); white-space: nowrap; overflow: hidden; line-height: 1.1; }
+    .sidebar-logo { width: 32px; height: 32px; border-radius: 6px; flex-shrink: 0; }
+    .sidebar-title { font-size: 17px; font-weight: 700; color: var(--sidebar-foreground); white-space: nowrap; overflow: hidden; line-height: 1.1; }
+    .sidebar-subtitle { font-size: 12.5px; color: var(--sidebar-muted); white-space: nowrap; overflow: hidden; line-height: 1.1; }
 
     .sidebar-user {
       padding: 8px 13px; font-size: 12px; color: var(--sidebar-muted);
@@ -408,8 +408,8 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <a href="/" style="display:flex;align-items:center;gap:0;text-decoration:none;min-width:0;flex:1;" title="Go to home">
-        <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w" class="sidebar-logo">
-        <div style="min-width:0;line-height:1.2;margin-left:3px;">
+        <img src="{{ url_for('static', filename='logo.svg') }}" alt="z2w" class="sidebar-logo" style="width:32px;height:32px;margin-right:-4px;">
+        <div style="min-width:0;line-height:1.2;margin-left:0;">
           <div class="sidebar-title">Z2W</div>
           <div class="sidebar-subtitle"><a href="https://rhcsolutions.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">RHC Solutions</a></div>
         </div>
@@ -429,11 +429,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         <span>Tenants</span>
       </a>
-      <a href="{{ url_for('wizard') }}" class="nav-item {% if request.endpoint == 'wizard' %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span>Add Tenant</span>
-      </a>
-
       <!-- ── Tenant tree ────────────────────────────────── -->
       {%- set _cur_slug = g.tenant_slug if g and g.tenant_slug else '' %}
       {% if g and g.all_tenants %}
@@ -487,10 +482,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         <span>Logout</span>
       </a>
-      <button class="collapse-btn" onclick="toggleSidebar()" id="collapseBtn">
-        <svg id="collapseIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="m15 18-6-6 6-6"/></svg>
-        <span class="collapse-label">Collapse</span>
-      </button>
+
     </div>
   </aside>
 
@@ -543,7 +535,7 @@ function fmtDT(d){var r=_parseDate(d);if(!r)return'—';var dd=String(r.getDate(
 function fmtTime(d){var r=_parseDate(d);if(!r)return'—';var hh=String(r.getHours()).padStart(2,'0'),mi=String(r.getMinutes()).padStart(2,'0'),ss=String(r.getSeconds()).padStart(2,'0');return hh+':'+mi+':'+ss;}
 const CKEY = 'z2w_sb_collapsed';
 const UI_STATE_VERSION_KEY = 'z2w_ui_state_version';
-const UI_STATE_VERSION = '2026-02-21-2';
+const UI_STATE_VERSION = '2026-02-27-1';
 // One-time reset of stale UI state so new defaults are visible immediately
 (function resetUiStateOnce(){
   try {
@@ -555,19 +547,7 @@ const UI_STATE_VERSION = '2026-02-21-2';
     }
   } catch(e) {}
 })();
-function toggleSidebar() {
-  const sb = document.getElementById('sidebar');
-  const ic = document.getElementById('collapseIcon');
-  const c = sb.classList.toggle('collapsed');
-  localStorage.setItem(CKEY, c ? '1' : '');
-  ic.innerHTML = c ? '<path d="m9 18 6-6-6-6"/>' : '<path d="m15 18-6-6 6-6"/>';
-}
-(function(){
-  if (localStorage.getItem(CKEY)) {
-    document.getElementById('sidebar').classList.add('collapsed');
-    document.getElementById('collapseIcon').innerHTML = '<path d="m9 18 6-6-6-6"/>';
-  }
-})();
+function toggleSidebar() {} // sidebar always expanded
 
 function showToast(message, type) {
   type = type || 'success';
