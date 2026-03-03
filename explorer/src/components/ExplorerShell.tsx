@@ -19,13 +19,12 @@ const NAV: { id: PanelId; label: string; icon: React.ElementType }[] = [
 export function ExplorerShell() {
   const [active, setActive] = useState<PanelId>("tickets");
   const [creds, setCreds] = useState<StoredCreds | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(true);
 
   useEffect(() => {
-    setMounted(true);
     const local = loadCreds();
     if (local?.subdomain && local?.token) {
-      setCreds(local);
+      queueMicrotask(() => setCreds(local));
     }
     // Always sync from server settings — they take priority
     fetchServerCreds().then((server) => {
