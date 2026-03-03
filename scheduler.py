@@ -709,7 +709,7 @@ The backup file is being sent to you now...
                 logger.info(f"[DailyStats] Building report for tenant: {tenant.slug}")
 
                 # ── Query this tenant's DB ────────────────────────────────
-                db = get_db()
+                db = get_db(tenant.slug)
                 try:
                     offload_logs = db.query(OffloadLog).filter(
                         OffloadLog.run_date >= yesterday_start,
