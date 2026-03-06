@@ -66,14 +66,22 @@ class BackupManager:
             logger.info(f"Starting full backup: {backup_filename}")
             
             # Create tar.gz archive of the entire application directory
-            # Exclude backups directory itself and __pycache__ directories
+            # Exclude heavy/regenerable artefacts to keep the archive under
+            # Telegram's 50 MB upload limit.
             exclude_patterns = [
                 '--exclude=backups',
                 '--exclude=__pycache__',
                 '--exclude=*.pyc',
                 '--exclude=.git',
                 '--exclude=venv',
-                '--exclude=env'
+                '--exclude=.venv',
+                '--exclude=env',
+                '--exclude=node_modules',
+                '--exclude=.next',
+                '--exclude=explorer/out',
+                '--exclude=explorer/node_modules',
+                '--exclude=explorer/.next',
+                '--exclude=static/explorer/app',
             ]
             
             # Change to parent directory to include the app folder name in archive

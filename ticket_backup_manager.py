@@ -537,28 +537,33 @@ class TicketBackupManager:
             db.add(run_row)
             db.commit()
 
-            # ── Mirror run row to the active tenant DB ─────────────────
-            try:
-                from tenant_manager import list_tenants, get_tenant_db_session
-                tenants = list_tenants(active_only=True)
-                if tenants:
-                    tdb = get_tenant_db_session(tenants[0].slug)
-                    try:
-                        tdb.add(TicketBackupRun(
-                            run_date=run_row.run_date,
-                            tickets_scanned=run_row.tickets_scanned,
-                            tickets_backed_up=run_row.tickets_backed_up,
-                            files_uploaded=run_row.files_uploaded,
-                            bytes_uploaded=run_row.bytes_uploaded,
-                            errors_count=run_row.errors_count,
-                            status=run_row.status,
-                            details=run_row.details,
-                        ))
-                        tdb.commit()
-                    finally:
-                        tdb.close()
-            except Exception as _te:
-                logger.warning(f"Could not mirror TicketBackupRun to tenant DB (non-fatal): {_te}")
+            # ── Mirror run row to the first active tenant DB ─────────────
+            # Only mirror when running in single-tenant/legacy mode (no
+            # set_current_tenant).  In multi-tenant mode the row is already
+            # written to the correct tenant DB, so mirroring would duplicate.
+            from database import _thread_local as _tl
+            if not getattr(_tl, 'slug', None):
+                try:
+                    from tenant_manager import list_tenants, get_tenant_db_session
+                    tenants = list_tenants(active_only=True)
+                    if tenants:
+                        tdb = get_tenant_db_session(tenants[0].slug)
+                        try:
+                            tdb.add(TicketBackupRun(
+                                run_date=run_row.run_date,
+                                tickets_scanned=run_row.tickets_scanned,
+                                tickets_backed_up=run_row.tickets_backed_up,
+                                files_uploaded=run_row.files_uploaded,
+                                bytes_uploaded=run_row.bytes_uploaded,
+                                errors_count=run_row.errors_count,
+                                status=run_row.status,
+                                details=run_row.details,
+                            ))
+                            tdb.commit()
+                        finally:
+                            tdb.close()
+                except Exception as _te:
+                    logger.warning(f"Could not mirror TicketBackupRun to tenant DB (non-fatal): {_te}")
 
         finally:
             db.close()

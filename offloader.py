@@ -822,29 +822,35 @@ class AttachmentOffloader:
             
             summary["log_id"] = log_entry.id
 
-            # ── Mirror log entry to the active tenant DB ───────────────
-            try:
-                from tenant_manager import list_tenants, get_tenant_db_session
-                tenants = list_tenants(active_only=True)
-                if tenants:
-                    tdb = get_tenant_db_session(tenants[0].slug)
-                    try:
-                        tenant_log = OffloadLog(
-                            run_date=log_entry.run_date,
-                            tickets_processed=log_entry.tickets_processed,
-                            attachments_uploaded=log_entry.attachments_uploaded,
-                            inlines_uploaded=log_entry.inlines_uploaded,
-                            errors_count=log_entry.errors_count,
-                            status=log_entry.status,
-                            report_sent=log_entry.report_sent,
-                            details=log_entry.details,
-                        )
-                        tdb.add(tenant_log)
-                        tdb.commit()
-                    finally:
-                        tdb.close()
-            except Exception as _te:
-                logger.warning(f"Could not mirror OffloadLog to tenant DB (non-fatal): {_te}")
+            # ── Mirror log entry to the first active tenant DB ──────────
+            # Only mirror when running in single-tenant/legacy mode (no
+            # set_current_tenant).  In multi-tenant mode the OffloadLog is
+            # already written to the correct tenant DB, so mirroring would
+            # create duplicates.
+            from database import _thread_local as _tl
+            if not getattr(_tl, 'slug', None):
+                try:
+                    from tenant_manager import list_tenants, get_tenant_db_session
+                    tenants = list_tenants(active_only=True)
+                    if tenants:
+                        tdb = get_tenant_db_session(tenants[0].slug)
+                        try:
+                            tenant_log = OffloadLog(
+                                run_date=log_entry.run_date,
+                                tickets_processed=log_entry.tickets_processed,
+                                attachments_uploaded=log_entry.attachments_uploaded,
+                                inlines_uploaded=log_entry.inlines_uploaded,
+                                errors_count=log_entry.errors_count,
+                                status=log_entry.status,
+                                report_sent=log_entry.report_sent,
+                                details=log_entry.details,
+                            )
+                            tdb.add(tenant_log)
+                            tdb.commit()
+                        finally:
+                            tdb.close()
+                except Exception as _te:
+                    logger.warning(f"Could not mirror OffloadLog to tenant DB (non-fatal): {_te}")
         finally:
             db.close()
         

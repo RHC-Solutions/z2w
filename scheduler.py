@@ -709,7 +709,12 @@ The backup file is being sent to you now...
                 logger.info(f"[DailyStats] Building report for tenant: {tenant.slug}")
 
                 # ── Query this tenant's DB ────────────────────────────────
-                db = get_db(tenant.slug)
+                try:
+                    from tenant_manager import get_tenant_db_session
+                    db = get_tenant_db_session(tenant.slug)
+                except Exception as _db_err:
+                    logger.warning(f"[DailyStats] Could not open tenant DB for {tenant.slug}: {_db_err}")
+                    db = get_db(tenant.slug)
                 try:
                     offload_logs = db.query(OffloadLog).filter(
                         OffloadLog.run_date >= yesterday_start,

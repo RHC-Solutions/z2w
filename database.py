@@ -244,8 +244,12 @@ def get_db(slug: str = None):
         try:
             from tenant_manager import get_tenant_db_session
             return get_tenant_db_session(slug)
-        except Exception:
-            pass  # Fall through to legacy DB
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger('zendesk_offloader').warning(
+                f"get_db: get_tenant_db_session('{slug}') failed — falling back "
+                f"to root DB: {exc}", exc_info=True,
+            )
 
     return SessionLocal()
 
