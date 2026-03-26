@@ -36,33 +36,34 @@ interface TicketStatus {
 }
 
 const ZD_STATUS_COLORS: Record<string, string> = {
-  open:    "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+  open: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
   pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
-  solved:  "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  closed:  "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  solved: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
+  closed: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
 };
 
 const BACKUP_COLORS: Record<string, string> = {
   success: "text-green-600 dark:text-green-400",
   pending: "text-yellow-600 dark:text-yellow-400",
-  failed:  "text-red-600 dark:text-red-400",
+  failed: "text-red-600 dark:text-red-400",
   skipped: "text-muted-foreground",
 };
 
 const PAGE_SIZES = [25, 50, 100];
 type SortKey = "id" | "created_at" | "updated_at" | "status";
 type OffloadFilter = "all" | "offloaded" | "not_offloaded";
-type BackupFilter  = "all" | "success" | "pending" | "failed" | "none";
+type BackupFilter = "all" | "success" | "pending" | "failed" | "none";
+type SearchField = "all" | "subject" | "requester";
 
 function BackupBadge({ status }: { status: string | null }) {
   if (!status) return <span className="text-muted-foreground/40 text-xs">–</span>;
   const icon = status === "success"
     ? <CheckCircle2 className="h-3 w-3" />
     : status === "failed"
-    ? <XCircle className="h-3 w-3" />
-    : status === "pending"
-    ? <Clock className="h-3 w-3" />
-    : <Archive className="h-3 w-3" />;
+      ? <XCircle className="h-3 w-3" />
+      : status === "pending"
+        ? <Clock className="h-3 w-3" />
+        : <Archive className="h-3 w-3" />;
   return (
     <span className={`inline-flex items-center gap-0.5 text-xs font-medium ${BACKUP_COLORS[status] ?? "text-muted-foreground"}`}>
       {icon}{status}
@@ -95,26 +96,27 @@ function SortIcon({ col, sortBy, sortDir }: { col: SortKey; sortBy: SortKey; sor
 interface Props { creds: StoredCreds | null; }
 
 export function TicketsPanel({ creds }: Props) {
-  const [tickets, setTickets]       = useState<Ticket[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage]             = useState(1);
-  const [pageSize, setPageSize]     = useState(50);
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Search / filters
   const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch]           = useState("");
+  const [search, setSearch] = useState("");
+  const [searchField, setSearchField] = useState<SearchField>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [offloadFilter, setOffloadFilter] = useState<OffloadFilter>("all");
-  const [backupFilter, setBackupFilter]   = useState<BackupFilter>("all");
+  const [backupFilter, setBackupFilter] = useState<BackupFilter>("all");
 
   // Sort
-  const [sortBy, setSortBy]   = useState<SortKey>("id");
+  const [sortBy, setSortBy] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   // z2w status maps keyed by ticket_id string
-  const [sizeMap,   setSizeMap]   = useState<Record<string, number>>({});
+  const [sizeMap, setSizeMap] = useState<Record<string, number>>({});
   const [statusMap, setStatusMap] = useState<Record<string, TicketStatus>>({});
 
   const connected = Boolean(creds?.subdomain && creds?.token);
@@ -124,16 +126,38 @@ export function TicketsPanel({ creds }: Props) {
     setLoading(true);
     setError(null);
     try {
-      let path = `/tickets.json?per_page=${pageSize}&page=${page}&sort_by=${sortBy}&sort_order=${sortDir}`;
-      if (search)       path += `&q=${encodeURIComponent(search)}`;
-      if (statusFilter !== "all") path += `&status=${statusFilter}`;
-      const data = await zendeskFetch(creds.subdomain, creds.email, creds.token, path) as {
-        tickets: Ticket[];
-        count: number;
-      };
-      const tix = data.tickets || [];
+      let tix: Ticket[];
+      let count: number;
+
+      if (search) {
+        // Use Zendesk Search API for field-specific queries
+        let query = "type:ticket";
+        if (searchField === "requester") query += ` requester:"${search}"`;
+        else if (searchField === "subject") query += ` subject:"${search}"`;
+        else query += ` ${search}`;
+        if (statusFilter !== "all") query += ` status:${statusFilter}`;
+        const searchSort = sortBy === "id" ? "created_at" : sortBy;
+        const path = `/search.json?query=${encodeURIComponent(query)}&per_page=${pageSize}&page=${page}&sort_by=${searchSort}&sort_order=${sortDir}`;
+        const data = await zendeskFetch(creds.subdomain, creds.email, creds.token, path) as {
+          results: Ticket[];
+          count: number;
+        };
+        tix = (data.results || []).filter((r) => (r as unknown as Record<string, unknown>).result_type === "ticket");
+        count = data.count || 0;
+      } else {
+        // Use Tickets API for unfiltered listing
+        let path = `/tickets.json?per_page=${pageSize}&page=${page}&sort_by=${sortBy}&sort_order=${sortDir}`;
+        if (statusFilter !== "all") path += `&status=${statusFilter}`;
+        const data = await zendeskFetch(creds.subdomain, creds.email, creds.token, path) as {
+          tickets: Ticket[];
+          count: number;
+        };
+        tix = data.tickets || [];
+        count = data.count || 0;
+      }
+
       setTickets(tix);
-      setTotalCount(data.count || 0);
+      setTotalCount(count);
 
       if (tix.length > 0) {
         const ids = tix.map((t) => t.id).join(",");
@@ -153,26 +177,26 @@ export function TicketsPanel({ creds }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [connected, creds, page, pageSize, sortBy, sortDir, search, statusFilter]);
+  }, [connected, creds, page, pageSize, sortBy, sortDir, search, searchField, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
 
   // Client-side filter for offload / backup (since Zendesk API doesn't know about these)
   const filteredTickets = tickets.filter((t) => {
     const s = statusMap[String(t.id)];
-    if (offloadFilter === "offloaded"     && !(s?.offloaded))  return false;
-    if (offloadFilter === "not_offloaded" && s?.offloaded)     return false;
+    if (offloadFilter === "offloaded" && !(s?.offloaded)) return false;
+    if (offloadFilter === "not_offloaded" && s?.offloaded) return false;
     if (backupFilter !== "all") {
       const bs = s?.backup_status ?? null;
-      if (backupFilter === "none"    && bs !== null)            return false;
-      if (backupFilter !== "none"    && bs !== backupFilter)    return false;
+      if (backupFilter === "none" && bs !== null) return false;
+      if (backupFilter !== "none" && bs !== backupFilter) return false;
     }
     return true;
   });
 
   const totalPages = Math.max(1, Math.ceil(Math.min(totalCount, 10000) / pageSize));
-  const subdomain  = creds?.subdomain ? getSubdomain(creds.subdomain) : "";
-  const ticketUrl  = subdomain ? `https://${subdomain}.zendesk.com/agent/tickets/` : null;
+  const subdomain = creds?.subdomain ? getSubdomain(creds.subdomain) : "";
+  const ticketUrl = subdomain ? `https://${subdomain}.zendesk.com/agent/tickets/` : null;
 
   function toggleSort(col: SortKey) {
     if (col === sortBy) setSortDir((d) => d === "asc" ? "desc" : "asc");
@@ -187,8 +211,16 @@ export function TicketsPanel({ creds }: Props) {
       {/* ── Toolbar row 1: search + sort ── */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
+          <Select value={searchField} onValueChange={(v) => { setSearchField(v as SearchField); setPage(1); }}>
+            <SelectTrigger className="h-8 w-40 text-xs shrink-0"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All fields</SelectItem>
+              <SelectItem value="subject">Subject</SelectItem>
+              <SelectItem value="requester">Requester name</SelectItem>
+            </SelectContent>
+          </Select>
           <Input
-            placeholder="Search tickets…"
+            placeholder={searchField === "requester" ? "Search by name…" : searchField === "subject" ? "Search by subject…" : "Search tickets…"}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") applySearch(); }}
@@ -253,8 +285,8 @@ export function TicketsPanel({ creds }: Props) {
           {offloadFilter !== "all" || backupFilter !== "all"
             ? `${filteredTickets.length} shown (filtered) · ${totalCount.toLocaleString()} total`
             : totalCount > 0
-            ? `${((page - 1) * pageSize + 1).toLocaleString()}–${Math.min(page * pageSize, totalCount).toLocaleString()} of ${totalCount.toLocaleString()}`
-            : "0 tickets"}
+              ? `${((page - 1) * pageSize + 1).toLocaleString()}–${Math.min(page * pageSize, totalCount).toLocaleString()} of ${totalCount.toLocaleString()}`
+              : "0 tickets"}
           {totalCount > 10000 && <span className="ml-1">(first 10,000 via offset API)</span>}
         </span>
         <div className="flex items-center gap-1">
